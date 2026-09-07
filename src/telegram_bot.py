@@ -5,8 +5,8 @@ from telegram import Bot
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() or None
+CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip() or None
 
 TELEGRAM_MAX_LENGTH = 4096
 
