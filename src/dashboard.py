@@ -1,0 +1,88 @@
+import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+
+from datetime import datetime
+from macro import get_macro_snapshot
+from sectors import get_sector_snapshot
+from telegram_bot import send_alert
+
+def format_market_time(ts, label):
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts)
+        return f"📍 {label}: {dt.strftime('%b %d, %Y')}"
+    except:
+        return f"📍 {label}: {ts}"
+
+def format_dashboard(macro, sectors):
+    """
+    Pure formatting — takes already-fetched macro and sector data and
+    returns the formatted dashboard text. Does NOT fetch data itself.
+    Callers must supply data fetched elsewhere (e.g. from
+    analyst.analyze_market()) so the snapshot always matches the
+    numbers the analyst actually reasoned about.
+    """
+    today = datetime.now().strftime("%B %d, %Y")
+
+    us_lines = "\n".join(f"• {line}" for line in sectors.get("us", []))
+    kr_lines = "\n".join(f"• {line}" for line in sectors.get("kr", []))
+    us_time_label = format_market_time(sectors.get("us_time"), "US Market Close")
+    kr_time_label = format_market_time(sectors.get("kr_time"), "KR Market Close")
+
+    message = f"""
+📊 Daily Market Dashboard
+🗓 {today}
+
+━━━━━━━━━━━━━━━
+🌡 MACRO SNAPSHOT
+━━━━━━━━━━━━━━━
+- VIX: {macro.get('VIX', 'N/A')}
+- WTI Crude: {macro.get('WTI', 'N/A')}
+- Gold: {macro.get('Gold', 'N/A')} | Copper: {macro.get('Copper', 'N/A')}
+- Gold/Copper Ratio: {macro.get('Gold/Copper Ratio', 'N/A')}
+- Dollar Index: {macro.get('Dollar Index', 'N/A')}
+
+📈 RATES & CREDIT
+- 10Y Treasury: {macro.get('10Y Treasury', 'N/A')}
+- 2Y Treasury: {macro.get('2Y Treasury', 'N/A')}
+- 2s10s Spread: {macro.get('2s10s Spread', 'N/A')}
+- HY OAS: {macro.get('HY OAS', 'N/A')}
+- IG OAS: {macro.get('IG OAS', 'N/A')}
+- USD/KRW: {sectors.get('fx', 'N/A')}
+
+━━━━━━━━━━━━━━━
+🇺🇸 US SECTORS
+{us_time_label}
+━━━━━━━━━━━━━━━
+{us_lines}
+
+━━━━━━━━━━━━━━━
+🇰🇷 KOREAN SECTORS
+{kr_time_label}
+━━━━━━━━━━━━━━━
+{kr_lines}
+"""
+    return message.strip()
+
+def build_dashboard():
+    """
+    Standalone use only (e.g. running `python dashboard.py` directly
+    to sanity-check formatting). Fetches its own fresh data. NOT used
+    by the daily main.py run — that path fetches once via
+    analyst.analyze_market() and calls format_dashboard() directly to
+    avoid duplicate API calls and mismatched numbers.
+    """
+    macro = get_macro_snapshot()
+    sectors = get_sector_snapshot()
+    return format_dashboard(macro, sectors)
+
+def send_dashboard():
+    print("Sending daily dashboard...")
+    message = build_dashboard()
+    send_alert(message)
+    print("Dashboard sent.")
+
+if __name__ == "__main__":
+    send_dashboard()
