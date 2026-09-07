@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(__file__))
 load_dotenv()
 
-TOSS_CLIENT_ID = os.getenv("TOSS_APP_KEY")
-TOSS_CLIENT_SECRET = os.getenv("TOSS_APP_SECRET")
+TOSS_CLIENT_ID = (os.getenv("TOSS_APP_KEY") or "").strip() or None
+TOSS_CLIENT_SECRET = (os.getenv("TOSS_APP_SECRET") or "").strip() or None
 TOSS_BASE = "https://openapi.tossinvest.com"
 
 US_ETFS = {
