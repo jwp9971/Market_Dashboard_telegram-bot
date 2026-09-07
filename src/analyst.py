@@ -12,7 +12,7 @@ from sectors import get_sector_snapshot
 
 load_dotenv()
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip() or None
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
 SYSTEM_PROMPT = """You are a senior macro strategist with 15+ years across rates, FX, and cross-asset strategy. Write a daily note for a small circle of investors who want your actual view, not a hedged sell-side summary.
