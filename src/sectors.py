@@ -1,17 +1,17 @@
 import os
 import sys
-import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 
-import requests
+import yfinance as yf
+import alpaca_trade_api as tradeapi
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
 load_dotenv()
 
-TOSS_CLIENT_ID = (os.getenv("TOSS_APP_KEY") or "").strip() or None
-TOSS_CLIENT_SECRET = (os.getenv("TOSS_APP_SECRET") or "").strip() or None
-TOSS_BASE = "https://openapi.tossinvest.com"
+ALPACA_API_KEY = (os.getenv("ALPACA_API_KEY") or "").strip() or None
+ALPACA_SECRET_KEY = (os.getenv("ALPACA_SECRET_KEY") or "").strip() or None
+ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 
 US_ETFS = {
     "DIA": "Dow Jones",
@@ -26,46 +26,21 @@ US_ETFS = {
     "IGV": "Software",
     "ITA": "Aerospace & Defense",
     "DRAM": "Memory & Storage",
-    "EWJ": "Japan MSCI",
 }
 
-KR_ETFS = {
-    "069500": "KODEX 200",
-    "091160": "KODEX 반도체",
-    "305720": "KODEX 2차전지산업",
-    "091170": "KODEX 은행",
-    "244580": "KODEX 바이오",
-    "487240": "KODEX AI전력핵심설비",
-    "466920": "SOL 조선TOP3플러스",
-    "449450": "PLUS K방산",
+KR_PROXY = {
+    "EWY": "Korea (MSCI South Korea ETF)",
 }
 
 
-def get_toss_token():
-    if not TOSS_CLIENT_ID or not TOSS_CLIENT_SECRET:
-        print("TOSS credentials are not configured; skipping sector fetch")
+def get_alpaca_client():
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+        print("Alpaca credentials are not configured; skipping sector fetch")
         return None
-
     try:
-        response = requests.post(
-            f"{TOSS_BASE}/oauth2/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "grant_type": "client_credentials",
-                "client_id": TOSS_CLIENT_ID,
-                "client_secret": TOSS_CLIENT_SECRET,
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
-        data = response.json()
-        if "access_token" in data:
-            return data["access_token"]
-        else:
-            print(f"Toss auth error: {data}")
-            return None
+        return tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
     except Exception as e:
-        print(f"Toss auth error: {e}")
+        print(f"Alpaca client error: {e}")
         return None
 
 
@@ -74,11 +49,9 @@ def format_change_line(day_change, week_change=None, month_change=None):
     day_text = f"{day_arrow}{abs(day_change):.2f}% D/D" if day_change is not None else "D/D N/A"
 
     parts = [day_text]
-
     if week_change is not None:
         week_arrow = "▲" if week_change >= 0 else "▼"
         parts.append(f"{week_arrow}{abs(week_change):.2f}% 1W")
-
     if month_change is not None:
         month_arrow = "▲" if month_change >= 0 else "▼"
         parts.append(f"{month_arrow}{abs(month_change):.2f}% 1M")
@@ -86,146 +59,117 @@ def format_change_line(day_change, week_change=None, month_change=None):
     return " | ".join(parts)
 
 
-def get_candle_change(token, symbol, retries=2, backoff_seconds=2):
+def get_bars_change(api, ticker):
     """
-    Fetches 25 daily candles for a symbol. Retries once or twice on
-    a 429 (rate limit) with a short backoff, since Toss's API can
-    throttle bursts when many tickers are requested back-to-back.
+    Fetches ~40 calendar days of daily bars from Alpaca in a single
+    request (comfortably covers the ~25 trading days needed for the
+    month lookback), and derives day/week/month percent changes from it.
     """
-    for attempt in range(retries + 1):
-        try:
-            response = requests.get(
-                f"{TOSS_BASE}/api/v1/candles",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"symbol": symbol, "interval": "1d", "count": 25},
-                timeout=15,
-            )
+    try:
+        start = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
+        bars = api.get_bars(ticker, "1Day", start=start, limit=40).df
 
-            if response.status_code == 429:
-                if attempt < retries:
-                    print(f"Rate limited on {symbol}, retrying in {backoff_seconds}s...")
-                    time.sleep(backoff_seconds)
-                    continue
-                else:
-                    print(f"Rate limited on {symbol}, out of retries")
-                    return None, None, None, None, None
-
-            response.raise_for_status()
-            data = response.json()
-            candles = data.get("result", {}).get("candles", [])
-
-            if len(candles) < 2:
-                return None, None, None, None, None
-
-            current_close = float(candles[0]["closePrice"])
-            prev_close = float(candles[1]["closePrice"])
-            day_change = round(((current_close - prev_close) / prev_close) * 100, 2)
-
-            week_change = None
-            if len(candles) >= 8:
-                week_close = float(candles[7]["closePrice"])
-                week_change = round(((current_close - week_close) / week_close) * 100, 2)
-
-            month_change = None
-            if len(candles) >= 23:
-                month_close = float(candles[22]["closePrice"])
-                month_change = round(((current_close - month_close) / month_close) * 100, 2)
-
-            timestamp = candles[0].get("timestamp")
-            return current_close, day_change, week_change, month_change, timestamp
-
-        except Exception as e:
-            print(f"Candle error for {symbol}: {e}")
+        if bars is None or bars.empty or len(bars) < 2:
             return None, None, None, None, None
 
-    return None, None, None, None, None
+        closes = bars["close"]
+        current_close = float(closes.iloc[-1])
+
+        def pct_change(offset):
+            if len(closes) <= offset:
+                return None
+            prior = float(closes.iloc[-1 - offset])
+            if prior == 0:
+                return None
+            return round(((current_close - prior) / prior) * 100, 2)
+
+        day_change = pct_change(1)
+        week_change = pct_change(5)
+        month_change = pct_change(21)
+        timestamp = bars.index[-1].isoformat()
+
+        return current_close, day_change, week_change, month_change, timestamp
+    except Exception as e:
+        print(f"Bar fetch error for {ticker}: {e}")
+        return None, None, None, None, None
 
 
-def get_exchange_rate(token):
+def get_exchange_rate():
+    """
+    Alpaca has no FX data, so USD/KRW is sourced from yfinance —
+    same reliable source macro.py already uses successfully.
+    """
     try:
-        response = requests.get(
-            f"{TOSS_BASE}/api/v1/exchange-rate",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"baseCurrency": "USD", "quoteCurrency": "KRW"},
-            timeout=15,
-        )
-        response.raise_for_status()
-        data = response.json()
-        result = data.get("result", {})
-        rate = result.get("rate")
-        change_type = result.get("rateChangeType", "")
-        arrow = "▲" if change_type == "UP" else "▼" if change_type == "DOWN" else "─"
-        return rate, arrow
+        history = yf.Ticker("USDKRW=X").history(period="5d", interval="1d").dropna()
+        if len(history) < 2:
+            return None, None
+        current = float(history["Close"].iloc[-1])
+        prev = float(history["Close"].iloc[-2])
+        arrow = "▲" if current >= prev else "▼"
+        return round(current, 1), arrow
     except Exception as e:
         print(f"Exchange rate error: {e}")
         return None, None
 
 
-def get_us_etf_data(token):
-    results = []
-    market_time = None
+def get_us_etf_data(api):
+    results, market_time = [], None
     for symbol, name in US_ETFS.items():
-        _, day_change, week_change, month_change, ts = get_candle_change(token, symbol)
+        _, day_change, week_change, month_change, ts = get_bars_change(api, symbol)
         if day_change is not None:
             if not market_time and ts:
                 market_time = ts
             results.append(f"{name} ({symbol}): {format_change_line(day_change, week_change, month_change)}")
         else:
             results.append(f"{name} ({symbol}): Data unavailable")
-        time.sleep(0.3)  # small pacing gap to avoid bursting the rate limit
     return results, market_time
 
 
-def get_kr_etf_data(token):
-    results = []
-    market_time = None
-    for code, name in KR_ETFS.items():
-        _, day_change, week_change, month_change, ts = get_candle_change(token, code)
+def get_kr_etf_data(api):
+    results, market_time = [], None
+    for symbol, name in KR_PROXY.items():
+        _, day_change, week_change, month_change, ts = get_bars_change(api, symbol)
         if day_change is not None:
             if not market_time and ts:
                 market_time = ts
-            results.append(f"{name}: {format_change_line(day_change, week_change, month_change)}")
+            results.append(f"{name} ({symbol}): {format_change_line(day_change, week_change, month_change)}")
         else:
-            results.append(f"{name}: Data unavailable")
-        time.sleep(0.3)  # small pacing gap to avoid bursting the rate limit
+            results.append(f"{name} ({symbol}): Data unavailable")
     return results, market_time
 
 
 def get_sector_snapshot():
-    token = get_toss_token()
-    if not token:
+    api = get_alpaca_client()
+    if not api:
         return {"us": ["Auth failed"], "kr": ["Auth failed"], "fx": "N/A", "us_time": None, "kr_time": None}
 
     snapshot = {}
-    us_data, us_time = get_us_etf_data(token)
-    kr_data, kr_time = get_kr_etf_data(token)
+    us_data, us_time = get_us_etf_data(api)
+    kr_data, kr_time = get_kr_etf_data(api)
     snapshot["us"] = us_data
     snapshot["kr"] = kr_data
     snapshot["us_time"] = us_time
     snapshot["kr_time"] = kr_time
 
-    rate, arrow = get_exchange_rate(token)
+    rate, arrow = get_exchange_rate()
     snapshot["fx"] = f"₩{rate} {arrow}" if rate else "N/A"
 
     return snapshot
 
 
 if __name__ == "__main__":
-    token = get_toss_token()
-    if not token:
-        print("Auth failed. Check your TOSS_APP_KEY and TOSS_APP_SECRET in .env")
+    api = get_alpaca_client()
+    if not api:
+        print("Auth failed. Check your ALPACA_API_KEY and ALPACA_SECRET_KEY in .env")
     else:
         print("✅ Auth successful\n")
-
-        us_lines, _ = get_us_etf_data(token)
+        us_lines, _ = get_us_etf_data(api)
         print("🇺🇸 US ETFs:")
         for line in us_lines:
             print(f"  {line}")
-
-        kr_lines, _ = get_kr_etf_data(token)
-        print("\n🇰🇷 Korean ETFs:")
+        kr_lines, _ = get_kr_etf_data(api)
+        print("\n🇰🇷 Korea Proxy:")
         for line in kr_lines:
             print(f"  {line}")
-
-        rate, arrow = get_exchange_rate(token)
+        rate, arrow = get_exchange_rate()
         print(f"\n💱 USD/KRW: ₩{rate} {arrow}")
