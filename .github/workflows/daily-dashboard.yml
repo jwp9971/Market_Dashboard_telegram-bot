@@ -1,0 +1,31 @@
+name: Daily Market Dashboard
+
+on:
+  schedule:
+    - cron: '0 23 * * 0-4'
+  workflow_dispatch: {}
+
+jobs:
+  run-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily dashboard
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          TOSS_APP_KEY: ${{ secrets.TOSS_APP_KEY }}
+          TOSS_APP_SECRET: ${{ secrets.TOSS_APP_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python src/main.py
