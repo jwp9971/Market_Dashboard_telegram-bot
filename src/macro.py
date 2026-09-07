@@ -5,7 +5,7 @@ import yfinance as yf
 
 load_dotenv()
 
-FRED_API_KEY = os.getenv("FRED_API_KEY")
+FRED_API_KEY = (os.getenv("FRED_API_KEY") or "").strip() or None
 
 
 def _format_number(value, digits=2):
