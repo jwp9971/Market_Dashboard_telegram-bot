@@ -3,7 +3,10 @@ import sys
 from datetime import datetime, timedelta
 
 import yfinance as yf
-import alpaca_trade_api as tradeapi
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import DataFeed
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -11,7 +14,6 @@ load_dotenv()
 
 ALPACA_API_KEY = (os.getenv("ALPACA_API_KEY") or "").strip() or None
 ALPACA_SECRET_KEY = (os.getenv("ALPACA_SECRET_KEY") or "").strip() or None
-ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 
 US_ETFS = {
     "DIA": "Dow Jones",
@@ -38,7 +40,7 @@ def get_alpaca_client():
         print("Alpaca credentials are not configured; skipping sector fetch")
         return None
     try:
-        return tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
+        return StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
     except Exception as e:
         print(f"Alpaca client error: {e}")
         return None
@@ -59,20 +61,36 @@ def format_change_line(day_change, week_change=None, month_change=None):
     return " | ".join(parts)
 
 
-def get_bars_change(api, ticker):
+def get_bars_change(client, ticker):
     """
-    Fetches ~40 calendar days of daily bars from Alpaca in a single
-    request (comfortably covers the ~25 trading days needed for the
-    month lookback), and derives day/week/month percent changes from it.
+    Fetches ~40 calendar days of daily bars via alpaca-py (Alpaca's
+    current, actively maintained SDK) and derives day/week/month
+    percent changes from it.
     """
     try:
-        start = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
-        bars = api.get_bars(ticker, "1Day", start=start, limit=40).df
+        end = datetime.now()
+        start = end - timedelta(days=40)
+        request = StockBarsRequest(
+            symbol_or_symbols=ticker,
+            timeframe=TimeFrame.Day,
+            start=start,
+            end=end,
+            feed=DataFeed.IEX,
+        )
+        bars = client.get_stock_bars(request)
+        df = bars.df
 
-        if bars is None or bars.empty or len(bars) < 2:
+        if df is None or df.empty:
             return None, None, None, None, None
 
-        closes = bars["close"]
+        # alpaca-py returns a MultiIndex (symbol, timestamp) DataFrame
+        if ticker in df.index.get_level_values(0):
+            df = df.loc[ticker]
+
+        closes = df["close"]
+        if len(closes) < 2:
+            return None, None, None, None, None
+
         current_close = float(closes.iloc[-1])
 
         def pct_change(offset):
@@ -86,7 +104,9 @@ def get_bars_change(api, ticker):
         day_change = pct_change(1)
         week_change = pct_change(5)
         month_change = pct_change(21)
-        timestamp = bars.index[-1].isoformat()
+
+        ts = closes.index[-1]
+        timestamp = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
 
         return current_close, day_change, week_change, month_change, timestamp
     except Exception as e:
@@ -95,10 +115,6 @@ def get_bars_change(api, ticker):
 
 
 def get_exchange_rate():
-    """
-    Alpaca has no FX data, so USD/KRW is sourced from yfinance —
-    same reliable source macro.py already uses successfully.
-    """
     try:
         history = yf.Ticker("USDKRW=X").history(period="5d", interval="1d").dropna()
         if len(history) < 2:
@@ -112,10 +128,10 @@ def get_exchange_rate():
         return None, None
 
 
-def get_us_etf_data(api):
+def get_us_etf_data(client):
     results, market_time = [], None
     for symbol, name in US_ETFS.items():
-        _, day_change, week_change, month_change, ts = get_bars_change(api, symbol)
+        _, day_change, week_change, month_change, ts = get_bars_change(client, symbol)
         if day_change is not None:
             if not market_time and ts:
                 market_time = ts
@@ -125,10 +141,10 @@ def get_us_etf_data(api):
     return results, market_time
 
 
-def get_kr_etf_data(api):
+def get_kr_etf_data(client):
     results, market_time = [], None
     for symbol, name in KR_PROXY.items():
-        _, day_change, week_change, month_change, ts = get_bars_change(api, symbol)
+        _, day_change, week_change, month_change, ts = get_bars_change(client, symbol)
         if day_change is not None:
             if not market_time and ts:
                 market_time = ts
@@ -139,13 +155,13 @@ def get_kr_etf_data(api):
 
 
 def get_sector_snapshot():
-    api = get_alpaca_client()
-    if not api:
+    client = get_alpaca_client()
+    if not client:
         return {"us": ["Auth failed"], "kr": ["Auth failed"], "fx": "N/A", "us_time": None, "kr_time": None}
 
     snapshot = {}
-    us_data, us_time = get_us_etf_data(api)
-    kr_data, kr_time = get_kr_etf_data(api)
+    us_data, us_time = get_us_etf_data(client)
+    kr_data, kr_time = get_kr_etf_data(client)
     snapshot["us"] = us_data
     snapshot["kr"] = kr_data
     snapshot["us_time"] = us_time
@@ -158,16 +174,16 @@ def get_sector_snapshot():
 
 
 if __name__ == "__main__":
-    api = get_alpaca_client()
-    if not api:
+    client = get_alpaca_client()
+    if not client:
         print("Auth failed. Check your ALPACA_API_KEY and ALPACA_SECRET_KEY in .env")
     else:
         print("✅ Auth successful\n")
-        us_lines, _ = get_us_etf_data(api)
+        us_lines, _ = get_us_etf_data(client)
         print("🇺🇸 US ETFs:")
         for line in us_lines:
             print(f"  {line}")
-        kr_lines, _ = get_kr_etf_data(api)
+        kr_lines, _ = get_kr_etf_data(client)
         print("\n🇰🇷 Korea Proxy:")
         for line in kr_lines:
             print(f"  {line}")
