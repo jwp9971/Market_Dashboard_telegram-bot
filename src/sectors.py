@@ -15,23 +15,39 @@ load_dotenv()
 ALPACA_API_KEY = (os.getenv("ALPACA_API_KEY") or "").strip() or None
 ALPACA_SECRET_KEY = (os.getenv("ALPACA_SECRET_KEY") or "").strip() or None
 
-US_ETFS = {
+MACRO_ETFS = {
+    # Indices
     "DIA": "Dow Jones",
     "SPY": "S&P 500",
     "QQQ": "Nasdaq 100",
     "IWM": "Russell 2000",
+    # Bonds
+    "HYG": "High Yield Bonds",
+    # Bitcoin
+    "IBIT": "Bitcoin",
+    # Geography
+    "EWY": "Korea",
+    "EWJ": "Japan",
+    "IEMG": "Emerging Markets (Broad)",
+}
+
+BROAD_INDUSTRY_ETFS = {
     "XLE": "Energy",
     "XLF": "Financials",
     "XLV": "Healthcare",
-    "SOXX": "Semiconductors",
-    "PAVE": "Infrastructure",
-    "IGV": "Software",
-    "ITA": "Aerospace & Defense",
-    "DRAM": "Memory & Storage",
+    "XLI": "Industrials",
+    "XLY": "Consumer Discretionary",
 }
 
-KR_PROXY = {
-    "EWY": "Korea (MSCI South Korea ETF)",
+THEME_ETFS = {
+    "SOXX": "Semiconductors",
+    "IGV": "Software",
+    "PAVE": "Infrastructure",
+    "ITA": "Aerospace & Defense",
+    "DRAM": "Memory & Storage",
+    "AIHY": "AI Hyperscale",
+    "BUG": "Cybersecurity",
+    "NCLD": "Neoclouds",
 }
 
 
@@ -62,11 +78,6 @@ def format_change_line(day_change, week_change=None, month_change=None):
 
 
 def get_bars_change(client, ticker):
-    """
-    Fetches ~40 calendar days of daily bars via alpaca-py (Alpaca's
-    current, actively maintained SDK) and derives day/week/month
-    percent changes from it.
-    """
     try:
         end = datetime.now()
         start = end - timedelta(days=40)
@@ -83,7 +94,6 @@ def get_bars_change(client, ticker):
         if df is None or df.empty:
             return None, None, None, None, None
 
-        # alpaca-py returns a MultiIndex (symbol, timestamp) DataFrame
         if ticker in df.index.get_level_values(0):
             df = df.loc[ticker]
 
@@ -128,49 +138,43 @@ def get_exchange_rate():
         return None, None
 
 
-def get_us_etf_data(client):
-    results, market_time = [], None
-    for symbol, name in US_ETFS.items():
+def get_etf_group_data(client, etf_dict):
+    results, group_time = [], None
+    for symbol, name in etf_dict.items():
         _, day_change, week_change, month_change, ts = get_bars_change(client, symbol)
         if day_change is not None:
-            if not market_time and ts:
-                market_time = ts
+            if not group_time and ts:
+                group_time = ts
             results.append(f"{name} ({symbol}): {format_change_line(day_change, week_change, month_change)}")
         else:
             results.append(f"{name} ({symbol}): Data unavailable")
-    return results, market_time
-
-
-def get_kr_etf_data(client):
-    results, market_time = [], None
-    for symbol, name in KR_PROXY.items():
-        _, day_change, week_change, month_change, ts = get_bars_change(client, symbol)
-        if day_change is not None:
-            if not market_time and ts:
-                market_time = ts
-            results.append(f"{name} ({symbol}): {format_change_line(day_change, week_change, month_change)}")
-        else:
-            results.append(f"{name} ({symbol}): Data unavailable")
-    return results, market_time
+    return results, group_time
 
 
 def get_sector_snapshot():
     client = get_alpaca_client()
     if not client:
-        return {"us": ["Auth failed"], "kr": ["Auth failed"], "fx": "N/A", "us_time": None, "kr_time": None}
+        return {
+            "macro": ["Auth failed"],
+            "broad_industry": ["Auth failed"],
+            "theme": ["Auth failed"],
+            "fx": "N/A",
+            "market_time": None,
+        }
 
-    snapshot = {}
-    us_data, us_time = get_us_etf_data(client)
-    kr_data, kr_time = get_kr_etf_data(client)
-    snapshot["us"] = us_data
-    snapshot["kr"] = kr_data
-    snapshot["us_time"] = us_time
-    snapshot["kr_time"] = kr_time
+    macro_data, macro_time = get_etf_group_data(client, MACRO_ETFS)
+    industry_data, industry_time = get_etf_group_data(client, BROAD_INDUSTRY_ETFS)
+    theme_data, theme_time = get_etf_group_data(client, THEME_ETFS)
 
     rate, arrow = get_exchange_rate()
-    snapshot["fx"] = f"₩{rate} {arrow}" if rate else "N/A"
 
-    return snapshot
+    return {
+        "macro": macro_data,
+        "broad_industry": industry_data,
+        "theme": theme_data,
+        "market_time": macro_time or industry_time or theme_time,
+        "fx": f"₩{rate} {arrow}" if rate else "N/A",
+    }
 
 
 if __name__ == "__main__":
@@ -179,13 +183,11 @@ if __name__ == "__main__":
         print("Auth failed. Check your ALPACA_API_KEY and ALPACA_SECRET_KEY in .env")
     else:
         print("✅ Auth successful\n")
-        us_lines, _ = get_us_etf_data(client)
-        print("🇺🇸 US ETFs:")
-        for line in us_lines:
-            print(f"  {line}")
-        kr_lines, _ = get_kr_etf_data(client)
-        print("\n🇰🇷 Korea Proxy:")
-        for line in kr_lines:
-            print(f"  {line}")
+        for label, group in [("🌍 MACRO", MACRO_ETFS), ("🏭 BROAD INDUSTRY", BROAD_INDUSTRY_ETFS), ("🎯 THEME", THEME_ETFS)]:
+            lines, _ = get_etf_group_data(client, group)
+            print(f"{label}:")
+            for line in lines:
+                print(f"  {line}")
+            print()
         rate, arrow = get_exchange_rate()
-        print(f"\n💱 USD/KRW: ₩{rate} {arrow}")
+        print(f"💱 USD/KRW: ₩{rate} {arrow}")
