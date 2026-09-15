@@ -1,8 +1,7 @@
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-import yfinance as yf
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -11,6 +10,8 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
 load_dotenv()
+
+from metrics import CHANGE_PCT, UNIT_USD, Metric, to_iso_date
 
 ALPACA_API_KEY = (os.getenv("ALPACA_API_KEY") or "").strip() or None
 ALPACA_SECRET_KEY = (os.getenv("ALPACA_SECRET_KEY") or "").strip() or None
@@ -55,10 +56,22 @@ THEME_ETFS = {
     "NCLD": "Neoclouds",
 }
 
+ETF_GROUPS = {
+    "macro": MACRO_ETFS,
+    "broad_industry": BROAD_INDUSTRY_ETFS,
+    "theme": THEME_ETFS,
+}
+
+GROUP_TITLES = {
+    "macro": "Indices / Bonds / Bitcoin / Geography",
+    "broad_industry": "Broad Industry",
+    "theme": "Theme",
+}
+
 
 def get_alpaca_client():
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        print("Alpaca credentials are not configured; skipping sector fetch")
+        print("Alpaca credentials are not configured; skipping ETF fetch")
         return None
     try:
         return StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
@@ -67,46 +80,37 @@ def get_alpaca_client():
         return None
 
 
-def format_change_line(day_change, week_change=None, month_change=None):
-    day_arrow = "▲" if day_change is not None and day_change >= 0 else "▼"
-    day_text = f"{day_arrow}{abs(day_change):.2f}% D/D" if day_change is not None else "D/D N/A"
-
-    parts = [day_text]
-    if week_change is not None:
-        week_arrow = "▲" if week_change >= 0 else "▼"
-        parts.append(f"{week_arrow}{abs(week_change):.2f}% 1W")
-    if month_change is not None:
-        month_arrow = "▲" if month_change >= 0 else "▼"
-        parts.append(f"{month_arrow}{abs(month_change):.2f}% 1M")
-
-    return " | ".join(parts)
-
-
-def get_bars_change(client, ticker):
+def get_etf_metric(client, symbol, label):
+    """Fetches one ETF and returns it as a Metric, including the observation
+    date of the bar the changes were computed from."""
+    metric = Metric(key=symbol, label=label, symbol=symbol,
+                    unit=UNIT_USD, change_kind=CHANGE_PCT, source="alpaca")
     try:
-        end = datetime.now()
-        start = end - timedelta(days=40)
+        # Explicit UTC: Alpaca treats a naive datetime as UTC, so a laptop in
+        # Korea and a UTC runner would otherwise request different windows.
+        end = datetime.now(timezone.utc)
         request = StockBarsRequest(
-            symbol_or_symbols=ticker,
+            symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
-            start=start,
+            start=end - timedelta(days=40),
             end=end,
             feed=DataFeed.IEX,
         )
-        bars = client.get_stock_bars(request)
-        df = bars.df
+        df = client.get_stock_bars(request).df
 
         if df is None or df.empty:
-            return None, None, None, None, None
+            metric.error = "no bars returned"
+            return metric
 
-        if ticker in df.index.get_level_values(0):
-            df = df.loc[ticker]
+        if symbol in df.index.get_level_values(0):
+            df = df.loc[symbol]
 
         closes = df["close"]
         if len(closes) < 2:
-            return None, None, None, None, None
+            metric.error = "not enough history"
+            return metric
 
-        current_close = float(closes.iloc[-1])
+        current = float(closes.iloc[-1])
 
         def pct_change(offset):
             if len(closes) <= offset:
@@ -114,89 +118,57 @@ def get_bars_change(client, ticker):
             prior = float(closes.iloc[-1 - offset])
             if prior == 0:
                 return None
-            return round(((current_close - prior) / prior) * 100, 2)
+            return round(((current - prior) / prior) * 100, 2)
 
-        day_change = pct_change(1)
-        week_change = pct_change(5)
-        month_change = pct_change(21)
-
-        ts = closes.index[-1]
-        timestamp = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-
-        return current_close, day_change, week_change, month_change, timestamp
+        metric.value = current
+        metric.day_change = pct_change(1)
+        metric.week_change = pct_change(5)
+        metric.month_change = pct_change(21)
+        metric.as_of = to_iso_date(closes.index[-1])
+        return metric
     except Exception as e:
-        print(f"Bar fetch error for {ticker}: {e}")
-        return None, None, None, None, None
+        print(f"Bar fetch error for {symbol}: {type(e).__name__}")
+        metric.error = "fetch failed"
+        return metric
 
 
-def get_exchange_rate():
-    try:
-        history = yf.Ticker("USDKRW=X").history(period="5d", interval="1d").dropna()
-        if len(history) < 2:
-            return None, None
-        current = float(history["Close"].iloc[-1])
-        prev = float(history["Close"].iloc[-2])
-        arrow = "▲" if current >= prev else "▼"
-        return round(current, 1), arrow
-    except Exception as e:
-        print(f"Exchange rate error: {e}")
-        return None, None
-
-
-def get_etf_group_data(client, etf_dict):
-    results, group_time = [], None
-    for symbol, name in etf_dict.items():
-        _, day_change, week_change, month_change, ts = get_bars_change(client, symbol)
-        if day_change is not None:
-            if not group_time and ts:
-                group_time = ts
-            results.append(f"{name} ({symbol}): {format_change_line(day_change, week_change, month_change)}")
-        else:
-            results.append(f"{name} ({symbol}): Data unavailable")
-    return results, group_time
-
-
-def _format_fx():
-    rate, arrow = get_exchange_rate()
-    return f"₩{rate} {arrow}" if rate else "N/A"
+def get_etf_group(client, group_key):
+    return [get_etf_metric(client, symbol, label)
+            for symbol, label in ETF_GROUPS[group_key].items()]
 
 
 def get_sector_snapshot():
+    """Returns {group_key: [Metric, ...]} for every key in SECTOR_GROUP_KEYS.
+
+    On an auth failure every ETF still appears, marked with an error, so the
+    report shows what is missing instead of going quiet.
+    """
     client = get_alpaca_client()
+
     if not client:
-        # FX comes from Yahoo, not Alpaca, so it is still available here.
         return {
-            "macro": ["Auth failed"],
-            "broad_industry": ["Auth failed"],
-            "theme": ["Auth failed"],
-            "fx": _format_fx(),
-            "market_time": None,
+            key: [Metric(key=symbol, label=label, symbol=symbol,
+                         source="alpaca", error="Alpaca auth failed")
+                  for symbol, label in ETF_GROUPS[key].items()]
+            for key in SECTOR_GROUP_KEYS
         }
 
-    macro_data, macro_time = get_etf_group_data(client, MACRO_ETFS)
-    industry_data, industry_time = get_etf_group_data(client, BROAD_INDUSTRY_ETFS)
-    theme_data, theme_time = get_etf_group_data(client, THEME_ETFS)
+    return {key: get_etf_group(client, key) for key in SECTOR_GROUP_KEYS}
 
-    return {
-        "macro": macro_data,
-        "broad_industry": industry_data,
-        "theme": theme_data,
-        "market_time": macro_time or industry_time or theme_time,
-        "fx": _format_fx(),
-    }
+
+def all_metrics(sector_snapshot):
+    """Flattens every group into one list, in group order."""
+    return [m for key in SECTOR_GROUP_KEYS for m in sector_snapshot.get(key, []) or []]
 
 
 if __name__ == "__main__":
     client = get_alpaca_client()
     if not client:
-        print("Auth failed. Check your ALPACA_API_KEY and ALPACA_SECRET_KEY in .env")
+        print("Auth failed. Check ALPACA_API_KEY and ALPACA_SECRET_KEY in .env")
     else:
         print("✅ Auth successful\n")
-        for label, group in [("🌍 MACRO", MACRO_ETFS), ("🏭 BROAD INDUSTRY", BROAD_INDUSTRY_ETFS), ("🎯 THEME", THEME_ETFS)]:
-            lines, _ = get_etf_group_data(client, group)
-            print(f"{label}:")
-            for line in lines:
-                print(f"  {line}")
+        for key in SECTOR_GROUP_KEYS:
+            print(f"{GROUP_TITLES[key]}:")
+            for metric in get_etf_group(client, key):
+                print(f"  {metric.render_line()}")
             print()
-        rate, arrow = get_exchange_rate()
-        print(f"💱 USD/KRW: ₩{rate} {arrow}")

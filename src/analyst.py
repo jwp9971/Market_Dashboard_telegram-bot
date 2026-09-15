@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(__file__))
 
 from macro import get_macro_snapshot
-from sectors import SECTOR_GROUP_KEYS, get_sector_snapshot
+from sectors import GROUP_TITLES, SECTOR_GROUP_KEYS, get_sector_snapshot
 
 load_dotenv()
 
@@ -35,9 +35,9 @@ Voice: decisive, direct, and slightly skeptical. Do not be timid about being wro
 
 Analytical sequence — work strictly top-down, in this order, and let each layer set the frame for the next:
 
-1. Macro first. Start with bond yields (2Y, 10Y, 2s10s), credit (HY OAS), commodities (gold, copper, WTI, gold/copper ratio), and FX (USD/KRW). This is the regime layer — establish whether the backdrop is risk-on, risk-off, or unclear before looking at a single equity number.
+1. Macro first. Start with bond yields (2Y, 10Y, 2s10s), credit (HY OAS and IG OAS — compare them; HY widening while IG holds is a different signal from both widening), commodities (gold, copper, WTI, gold/copper ratio), and FX (USD/KRW and the Dollar Index). This is the regime layer — establish whether the backdrop is risk-on, risk-off, or unclear before looking at a single equity number.
 
-2. Broad market next. Move to the headline indices (US: Dow, S&P 500, Nasdaq 100; plus KOSPI/KODEX 200 and any other broad index provided). Ask whether index-level direction is confirming or contradicting the macro read from step 1. Note if the answer differs meaningfully between US and Korea.
+2. Broad market next. Move to the headline indices (US: Dow, S&P 500, Nasdaq 100, Russell 2000). Korea is represented only by EWY, a US-listed, USD-denominated Korea ETF — its move embeds the USD/KRW change and US trading hours, so treat it as a rough proxy and never describe it as the KOSPI. Ask whether index-level direction is confirming or contradicting the macro read from step 1.
 
 3. Sector composition last. Only after the macro and index-level read is established, dissect what's driving it — which sector clusters are leading or lagging the index move, and whether that composition supports or undercuts the headline number (e.g. an index up only on narrow breadth is a different story than one up broadly).
 
@@ -47,52 +47,36 @@ Length discipline: You have a firm 600-word budget. Do not address every individ
 
 Only use data explicitly provided in the user message. Never reference outside news, events, or catalysts not given to you.
 
+Data quality is part of your job. Every metric carries an "as of" date. If the rates and credit inputs are dated earlier than the equity inputs, they are from a different session — say so plainly and do not present a credit signal as confirming or contradicting today's equity tape. Anything shown as N/A is unavailable: draw no inference from it, and note it if it undercuts a step of the sequence above.
+
 Format:
 1. Macro Read: 1-2 sentences on the regime — what rates, credit, commodities, and FX are collectively signaling
 2. Index Read: 1-2 sentences on whether headline indices (US and Korea) confirm or contradict the macro regime
 3. Sector Composition: 2-3 sentences on which sector clusters are driving the index-level move, and whether that composition strengthens or weakens the headline story
-4. Intraday Flag: (only if a genuinely violent single-day move occurred) what moved, the implication, and what would confirm it — otherwise state plainly that no single-day move rises to flag-worthy
+4. Daily Flag: (only if a genuinely violent single-day move occurred) what moved, the implication, and what would confirm it — otherwise state plainly that no single-day move rises to flag-worthy. Every input is a daily closing bar, so never describe intraday behaviour, session timing, or what happened "during" a day
 5. Trend View: 1-2 sentences on the weekly/monthly picture — this is your actual directional view, weighted toward multi-day data, not today's tape
 6. Watch: 1-2 tripwires — specific things that would change this view if they happen next
 
 Max 600 words total."""
 
 
-# Matches the change segments the formatters produce, e.g.
-#   "▲1.23% D/D"  "▼0.05pts 1W"  "▲2.00% 1M"
-_CHANGE_PATTERN = re.compile(
-    r"([▲▼])\s*([0-9]+(?:\.[0-9]+)?)\s*(?:%|pts)?\s*(D/D|1W|1M)"
-)
+def _change(snapshot, key, horizon="D/D"):
+    """Numeric change for one metric over one named horizon, or None.
 
-
-def parse_changes(text: Any) -> Dict[str, float]:
+    Reads the structured record directly. Nothing here parses display text:
+    the old arrow-scanning version could not tell a daily move from a monthly
+    one and inverted the regime read on days when they disagreed.
     """
-    Pulls signed numeric changes out of a formatted metric string, keyed by
-    horizon: {"D/D": -1.2, "1W": 0.4}.
-
-    This exists because collectors currently hand downstream code display
-    strings rather than numbers. It replaces the old behaviour of searching a
-    whole string for an arrow, which could not tell a daily move from a
-    monthly one and produced sign-inverted reads. Stage 2 (structured metric
-    records) removes the need for it entirely.
-    """
-    changes: Dict[str, float] = {}
-    for arrow, number, horizon in _CHANGE_PATTERN.findall(str(text or "")):
-        value = float(number)
-        changes[horizon] = value if arrow == "▲" else -value
-    return changes
+    metric = (snapshot or {}).get(key)
+    return metric.change(horizon) if hasattr(metric, "change") else None
 
 
-def _horizon(snapshot: Dict[str, Any], key: str, horizon: str = "D/D") -> Optional[float]:
-    return parse_changes(snapshot.get(key)).get(horizon)
-
-
-def _sector_breadth(sector_snapshot: Dict[str, Any], horizon: str = "D/D") -> Tuple[int, int]:
+def _sector_breadth(sector_snapshot, horizon: str = "D/D") -> Tuple[int, int]:
     """Counts ETFs up and down over one named horizon, across every group."""
     up = down = 0
     for group_key in SECTOR_GROUP_KEYS:
-        for line in sector_snapshot.get(group_key, []) or []:
-            change = parse_changes(line).get(horizon)
+        for metric in (sector_snapshot or {}).get(group_key, []) or []:
+            change = metric.change(horizon) if hasattr(metric, "change") else None
             if change is None:
                 continue
             if change >= 0:
@@ -127,16 +111,27 @@ def check_analysis_quality(text: Optional[str], truncated: bool = False) -> List
     return problems
 
 
-def _format_snapshot(snapshot: Dict[str, Any]) -> str:
-    if not snapshot:
+def _format_metric(metric) -> str:
+    line = metric.render_line() if hasattr(metric, "render_line") else str(metric)
+    as_of = getattr(metric, "as_of", None)
+    return f"- {line}" + (f"  [as of {as_of}]" if as_of else "")
+
+
+def _format_macro(macro_snapshot: Dict[str, Any]) -> str:
+    if not macro_snapshot:
         return "No data available"
-    lines = []
-    for key, value in snapshot.items():
-        if isinstance(value, list):
-            lines.append(f"- {key}: {', '.join(value)}")
-        else:
-            lines.append(f"- {key}: {value}")
-    return "\n".join(lines)
+    return "\n".join(_format_metric(m) for m in macro_snapshot.values())
+
+
+def _format_sectors(sector_snapshot: Dict[str, Any]) -> str:
+    blocks = []
+    for group_key in SECTOR_GROUP_KEYS:
+        group = (sector_snapshot or {}).get(group_key) or []
+        if not group:
+            continue
+        rendered = "\n".join(_format_metric(m) for m in group)
+        blocks.append(f"{GROUP_TITLES[group_key]}:\n{rendered}")
+    return "\n\n".join(blocks) or "No data available"
 
 
 def build_analysis_prompt(macro_snapshot: Dict[str, Any], sector_snapshot: Dict[str, Any]) -> str:
@@ -148,10 +143,10 @@ If the data is inconsistent, say that plainly.
 
 Data provided:
 Macro data:
-{_format_snapshot(macro_snapshot)}
+{_format_macro(macro_snapshot)}
 
-Sector data:
-{_format_snapshot(sector_snapshot)}
+Sector data (all US-listed ETFs, daily closing bars):
+{_format_sectors(sector_snapshot)}
 """
 
 
@@ -206,20 +201,20 @@ def generate_fallback_analysis(macro_snapshot: Dict[str, Any], sector_snapshot: 
     """
     Deterministic stand-in used when Claude is unavailable.
 
-    Every rule below reads a named numeric horizon. It never infers a regime
-    from an arrow appearing somewhere in a string, because a single metric
-    line carries daily, weekly and monthly moves that routinely disagree.
-    When the inputs it needs are missing it says so instead of asserting a
-    regime.
+    Every rule reads a named numeric horizon off the structured record. It
+    never infers a regime from formatted text, and it says "insufficient
+    data" rather than asserting a regime it cannot support.
     """
     macro_snapshot = macro_snapshot or {}
     sector_snapshot = sector_snapshot or {}
 
-    vix_d = _horizon(macro_snapshot, "VIX")
-    hy_d = _horizon(macro_snapshot, "HY OAS")
-    ten_d = _horizon(macro_snapshot, "10Y Treasury")
-    vix_w = _horizon(macro_snapshot, "VIX", "1W")
-    hy_w = _horizon(macro_snapshot, "HY OAS", "1W")
+    vix_d = _change(macro_snapshot, "VIX")
+    hy_d = _change(macro_snapshot, "HY OAS")
+    ig_d = _change(macro_snapshot, "IG OAS")
+    ten_d = _change(macro_snapshot, "10Y")
+    spread_d = _change(macro_snapshot, "2s10s")
+    vix_w = _change(macro_snapshot, "VIX", "1W")
+    hy_w = _change(macro_snapshot, "HY OAS", "1W")
 
     up, down = _sector_breadth(sector_snapshot, "D/D")
     total = up + down
@@ -242,11 +237,13 @@ def generate_fallback_analysis(macro_snapshot: Dict[str, Any], sector_snapshot: 
     if vix_d is not None:
         facts.append(f"VIX {_dir(vix_d)} {abs(vix_d):.2f}% on the day")
     if hy_d is not None:
-        facts.append(
-            f"HY OAS {_dir(hy_d, 'widened', 'tightened')} {abs(hy_d):.2f}pts on the day"
-        )
+        facts.append(f"HY OAS {_dir(hy_d, 'widened', 'tightened')} {abs(hy_d):.2f}pts on the day")
+    if ig_d is not None:
+        facts.append(f"IG OAS {_dir(ig_d, 'widened', 'tightened')} {abs(ig_d):.2f}pts on the day")
     if ten_d is not None:
         facts.append(f"the 10Y {_dir(ten_d)} {abs(ten_d):.2f}pts on the day")
+    if spread_d is not None:
+        facts.append(f"2s10s {_dir(spread_d, 'steepened', 'flattened')} {abs(spread_d):.2f}pts on the day")
     if total:
         facts.append(f"{up} of {total} tracked ETFs closed higher")
 
@@ -270,27 +267,23 @@ def generate_fallback_analysis(macro_snapshot: Dict[str, Any], sector_snapshot: 
 
     why = ("; ".join(facts) + ".") if facts else "No usable same-day changes were available."
 
-    # A daily move that contradicts the week is the most useful thing a
-    # deterministic summary can surface.
+    # A daily move that contradicts the week, or credit tiers disagreeing, is
+    # the most useful thing a deterministic summary can surface.
     doesnt_fit = "Nothing obvious stands out yet."
     if vix_d is not None and vix_w is not None and (vix_d >= 0) != (vix_w >= 0):
-        doesnt_fit = (
-            f"Today's VIX move ({vix_d:+.2f}%) runs against the week "
-            f"({vix_w:+.2f}%)."
-        )
+        doesnt_fit = f"Today's VIX move ({vix_d:+.2f}%) runs against the week ({vix_w:+.2f}%)."
     elif hy_d is not None and hy_w is not None and (hy_d >= 0) != (hy_w >= 0):
-        doesnt_fit = (
-            f"Today's HY OAS move ({hy_d:+.2f}pts) runs against the week "
-            f"({hy_w:+.2f}pts)."
-        )
+        doesnt_fit = f"Today's HY OAS move ({hy_d:+.2f}pts) runs against the week ({hy_w:+.2f}pts)."
+    elif hy_d is not None and ig_d is not None and (hy_d >= 0) != (ig_d >= 0):
+        doesnt_fit = "High yield and investment grade credit moved in opposite directions today."
     elif have_core and (vix_d >= 0) != (hy_d >= 0):
         doesnt_fit = "Volatility and credit are pointing in opposite directions today."
 
-    missing = [k for k in ("VIX", "HY OAS", "10Y Treasury")
-               if _horizon(macro_snapshot, k) is None]
+    unavailable = [key for key in ("VIX", "HY OAS", "IG OAS", "10Y")
+                   if _change(macro_snapshot, key) is None]
     coverage = ""
-    if missing:
-        coverage = f"\nData gaps: no same-day change for {', '.join(missing)}."
+    if unavailable:
+        coverage = f"\nData gaps: no same-day change for {', '.join(unavailable)}."
 
     return f"""Read: {read}
 Why (day-over-day only): {why}
