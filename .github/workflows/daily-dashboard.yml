@@ -5,9 +5,17 @@ on:
     - cron: '0 23 * * 0-4'
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-dashboard
+  cancel-in-progress: false
+
 jobs:
   run-dashboard:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -28,4 +36,16 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python src/main.py
+        # main.py exits 0 = OK, 1 = failed, 2 = delivered but degraded.
+        # The summary makes the difference visible without opening the logs.
+        run: |
+          set +e
+          python src/main.py
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "### Report delivered (OK)" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) echo "### Report delivered but DEGRADED - check the log for warnings" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "### Report FAILED (exit $code)" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          exit $code

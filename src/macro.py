@@ -1,4 +1,6 @@
+import math
 import os
+
 import requests
 from dotenv import load_dotenv
 import yfinance as yf
@@ -15,12 +17,17 @@ def _format_number(value, digits=2):
 
 
 def _coerce_numeric(value):
+    """Returns a finite float, or None. NaN and inf are treated as missing
+    so they can never reach a formatted message as 'nan%'."""
     try:
         if value in (None, "", "nan", "NaN", "N/A", "."):
             return None
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 def _arrow(value):
@@ -164,9 +171,9 @@ def get_macro_snapshot():
 
     gold, gold_d, gold_w, gold_m = get_yfinance_series("GC=F")
     copper, copper_d, copper_w, copper_m = get_yfinance_series("HG=F")
-    if gold and copper:
-        snapshot["Gold"] = format_metric_value(gold, format_pct_change_line(gold_d, gold_w, gold_m), prefix="$")
-        snapshot["Copper"] = format_metric_value(copper, format_pct_change_line(copper_d, copper_w, copper_m), prefix="$")
+    snapshot["Gold"] = format_metric_value(gold, format_pct_change_line(gold_d, gold_w, gold_m), prefix="$")
+    snapshot["Copper"] = format_metric_value(copper, format_pct_change_line(copper_d, copper_w, copper_m), prefix="$")
+    if gold is not None and copper:
         snapshot["Gold/Copper Ratio"] = round(gold / copper, 2)
 
     ten_y, ten_y_d, ten_y_w, ten_y_m = get_fred_series("DGS10")

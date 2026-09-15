@@ -39,6 +39,11 @@ BROAD_INDUSTRY_ETFS = {
     "XLY": "Consumer Discretionary",
 }
 
+# The group keys get_sector_snapshot() returns. analyst.py and dashboard.py
+# import this instead of hardcoding key names, so renaming a group here is a
+# one-line change that can't silently orphan a downstream consumer.
+SECTOR_GROUP_KEYS = ("macro", "broad_industry", "theme")
+
 THEME_ETFS = {
     "SOXX": "Semiconductors",
     "IGV": "Software",
@@ -151,14 +156,20 @@ def get_etf_group_data(client, etf_dict):
     return results, group_time
 
 
+def _format_fx():
+    rate, arrow = get_exchange_rate()
+    return f"₩{rate} {arrow}" if rate else "N/A"
+
+
 def get_sector_snapshot():
     client = get_alpaca_client()
     if not client:
+        # FX comes from Yahoo, not Alpaca, so it is still available here.
         return {
             "macro": ["Auth failed"],
             "broad_industry": ["Auth failed"],
             "theme": ["Auth failed"],
-            "fx": "N/A",
+            "fx": _format_fx(),
             "market_time": None,
         }
 
@@ -166,14 +177,12 @@ def get_sector_snapshot():
     industry_data, industry_time = get_etf_group_data(client, BROAD_INDUSTRY_ETFS)
     theme_data, theme_time = get_etf_group_data(client, THEME_ETFS)
 
-    rate, arrow = get_exchange_rate()
-
     return {
         "macro": macro_data,
         "broad_industry": industry_data,
         "theme": theme_data,
         "market_time": macro_time or industry_time or theme_time,
-        "fx": f"₩{rate} {arrow}" if rate else "N/A",
+        "fx": _format_fx(),
     }
 
 
