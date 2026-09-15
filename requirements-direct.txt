@@ -1,8 +1,11 @@
 # Packages this project imports directly. requirements.txt stays the full
 # pinned lock that CI and the scheduled run install; this file records intent.
-alpaca-py
 anthropic
 python-dotenv
 python-telegram-bot
 requests
 yfinance
+
+# Optional: only imported when ETF_SOURCE=alpaca. The default Yahoo path runs
+# without it.
+alpaca-py

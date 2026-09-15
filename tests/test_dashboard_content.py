@@ -48,12 +48,15 @@ def _macro(**overrides):
 
 
 def _sectors(as_of="2026-09-12"):
-    return {
+    snap = {
         key: [Metric(key=symbol, label=label, symbol=symbol, value=100.0,
                      day_change=0.5, unit=UNIT_USD, as_of=as_of)
               for symbol, label in sectors.ETF_GROUPS[key].items()]
         for key in sectors.SECTOR_GROUP_KEYS
     }
+    snap["price_source"] = "yahoo"
+    snap["price_source_note"] = None
+    return snap
 
 
 def test_ig_oas_and_dollar_index_are_shown():
@@ -141,6 +144,7 @@ def test_credit_lagging_equities_is_disclosed():
 
 
 def test_auth_failure_produces_a_readable_report(monkeypatch):
+    monkeypatch.setattr(sectors, "ETF_SOURCE", "alpaca")
     monkeypatch.setattr(sectors, "ALPACA_API_KEY", None)
     out = dashboard.format_dashboard(_macro(), sectors.get_sector_snapshot())
     assert "Daily Market Dashboard" in out

@@ -73,3 +73,22 @@ def test_required_macro_keys_are_documented():
 
 def test_limitations_section_exists():
     assert "## Known limitations" in README
+
+
+def test_etf_source_options_are_documented():
+    import sectors
+    assert "ETF_SOURCE" in README
+    assert sectors.ETF_SOURCE in README
+
+
+def test_the_total_return_policy_is_stated():
+    """The printed price and the percentage come from different series; that
+    has to be written down or it looks like a bug."""
+    assert "total return" in README.lower()
+
+
+def test_freshness_windows_match_the_code():
+    from metrics import MAX_AGE_FRED_OAS, MAX_AGE_FRED_RATES, MAX_AGE_MARKET_DAYS
+    assert MAX_AGE_FRED_RATES == MAX_AGE_FRED_OAS
+    assert f"{MAX_AGE_MARKET_DAYS} for equities" in README
+    assert f"{MAX_AGE_FRED_RATES} for both FRED families" in README

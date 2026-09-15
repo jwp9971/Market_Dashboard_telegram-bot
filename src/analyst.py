@@ -15,6 +15,17 @@ load_dotenv()
 ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip() or None
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
+# Claude Sonnet 5 runs adaptive thinking whether or not you ask for it, and
+# thinking tokens are drawn from the same max_tokens budget as the visible
+# reply. At the old 4096 the reasoning consumed most of the budget and the
+# note was cut off mid-section while looking far shorter than the limit.
+# Declaring both explicitly makes the behaviour visible in the code, and
+# 16000 is the SDK's recommended ceiling for a non-streaming request.
+ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "16000"))
+# A daily note over a fixed table of numbers is not a hard reasoning problem;
+# medium keeps thinking proportionate. low/medium/high/xhigh/max.
+ANTHROPIC_EFFORT = (os.getenv("ANTHROPIC_EFFORT") or "medium").strip().lower()
+
 # Quality gates applied to Claude's output before it is presented as a
 # finished note. The prompt asks for a 600-word note in six sections; these
 # bounds are deliberately loose so only genuinely broken output is flagged.
@@ -174,10 +185,24 @@ def call_claude(prompt: str) -> Dict[str, Any]:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
             model=ANTHROPIC_MODEL,
-            max_tokens=4096,
+            max_tokens=ANTHROPIC_MAX_TOKENS,
+            thinking={"type": "adaptive"},
+            output_config={"effort": ANTHROPIC_EFFORT},
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
+
+        # Logged so the token split is visible in the run: a short note with a
+        # high output count means thinking took the budget.
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            print(
+                "Claude usage: input={} output={} stop_reason={}".format(
+                    getattr(usage, "input_tokens", "?"),
+                    getattr(usage, "output_tokens", "?"),
+                    getattr(response, "stop_reason", "?"),
+                )
+            )
 
         if getattr(response, "stop_reason", None) == "max_tokens":
             result["truncated"] = True

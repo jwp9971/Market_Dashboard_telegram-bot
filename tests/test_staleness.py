@@ -82,13 +82,23 @@ def test_a_genuinely_dead_feed_is_caught():
     assert _m("2026-09-01").is_stale_at(date(2026, 9, 20)) is True
 
 
-def test_fred_oas_gets_the_longer_tolerance():
-    """ICE BofA OAS lags a business day, so the same date that is fine for an
-    OAS series would be fine for rates too -- but one more day is not."""
-    today = date(2026, 9, 20)
-    five_days_back = "2026-09-15"
-    assert _m(five_days_back, max_age=MAX_AGE_FRED_OAS).is_stale_at(today) is False
-    assert _m(five_days_back, max_age=MAX_AGE_FRED_RATES).is_stale_at(today) is True
+def test_fred_tolerances_absorb_a_publication_lag():
+    """Both FRED families were raised to 5 after a live run on 2026-09-15 held
+    Friday's yields on a Tuesday -- 4 days, exactly the old limit, so the next
+    Monday holiday would have false-alarmed."""
+    assert MAX_AGE_FRED_RATES == 5
+    assert MAX_AGE_FRED_OAS == 5
+    assert MAX_AGE_FRED_RATES > MAX_AGE_MARKET_DAYS
+
+
+def test_the_observed_friday_yields_on_tuesday_case_is_fresh():
+    """The exact shape of the 2026-09-15 run: FRED at Fri Sep 11, run Tue."""
+    observed = _m("2026-09-11", max_age=MAX_AGE_FRED_RATES)
+    assert observed.is_stale_at(date(2026, 9, 15)) is False
+    # ... and the same lag after a Monday holiday, which used to tip over.
+    assert observed.is_stale_at(date(2026, 9, 16)) is False
+    # A genuinely dead FRED feed still trips.
+    assert observed.is_stale_at(date(2026, 9, 18)) is True
 
 
 # --- marking and reporting -------------------------------------------------
