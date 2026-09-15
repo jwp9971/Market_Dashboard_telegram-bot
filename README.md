@@ -53,20 +53,29 @@ not calendar intervals** — 1, 5 and 21 preceding daily observations.
 |---|---|---|
 | **FRED** | 2Y/10Y Treasury yields, HY OAS, IG OAS | Yields from H.15 (same business day); ICE BofA OAS series routinely lag one business day |
 | **Yahoo Finance** | VIX, WTI, gold, copper, Dollar Index, USD/KRW | via `yfinance`, which is unofficial and can break without notice |
-| **Alpaca Markets** | Daily bars for **22** ETFs across 3 tiers | See the feed policy below |
+| **Yahoo Finance** | Daily bars for **22** ETFs across 3 tiers | One batched request; consolidated closes. See the price policy below |
+| **Alpaca Markets** | The same 22 ETFs, opt-in via `ETF_SOURCE=alpaca` | Free plans serve IEX only — see below |
 | **Anthropic Claude** | The strategist commentary | Model set by `ANTHROPIC_MODEL`, default `claude-sonnet-5` |
 
-### ETF feed and adjustment policy
+### ETF price policy
 
-Requests prefer Alpaca's **SIP** (consolidated) feed with **split
-adjustment**. The feed is probed once per run; if the account is not entitled
-to SIP, the run falls back to **IEX** and says so in the report footer and the
-logs. Set `ALPACA_FEED=iex` to pin it.
+ETF closes come from **Yahoo Finance** by default, fetched for all 22 symbols
+in a single batched request.
 
-IEX is a single exchange carrying a low single-digit share of consolidated
-volume, so for thinly traded funds its daily close can be built from very few
-prints. Prices are **split-adjusted but not dividend-adjusted**, so ETF
-changes are price returns, not total returns.
+- The **price shown** is the real market close.
+- The **changes** are computed from split- and dividend-adjusted closes, so an
+  ex-dividend date does not render as a genuine decline. These are therefore
+  **total returns**, while the printed price matches what you would look up.
+  The two series differ only across a split or a distribution.
+
+Alpaca remains available with `ETF_SOURCE=alpaca`. It prefers the **SIP**
+(consolidated) feed with split adjustment, probes it once per run, and falls
+back to **IEX** with a note in the report footer if the account is not
+entitled. A live run on 2026-09-15 showed exactly that: Alpaca refused SIP,
+and the IEX fallback returned `AIHY` unchanged to the cent over both a day and
+a week — a single exchange at a low single-digit share of consolidated volume
+can build a thinly traded fund's close from very few prints. That is why Yahoo
+is the default. `alpaca-py` is optional and only imported on that path.
 
 ### The 22 ETFs
 
@@ -93,11 +102,17 @@ git-ignored); in GitHub Actions, add them as repository secrets.
 | `TELEGRAM_CHAT_ID` | Destination chat |
 | `ANTHROPIC_API_KEY` | Claude commentary |
 | `FRED_API_KEY` | Treasury yields and credit spreads |
-| `ALPACA_API_KEY` | ETF daily bars |
-| `ALPACA_SECRET_KEY` | ETF daily bars |
+| `ALPACA_API_KEY` | ETF daily bars, only with `ETF_SOURCE=alpaca` |
+| `ALPACA_SECRET_KEY` | ETF daily bars, only with `ETF_SOURCE=alpaca` |
 
-Optional: `ANTHROPIC_MODEL` (default `claude-sonnet-5`), `ALPACA_FEED`
-(`sip` default, or `iex`), `DRY_RUN` (see below).
+Only `TELEGRAM_*`, `ANTHROPIC_API_KEY` and `FRED_API_KEY` are needed for the
+default configuration; the `ALPACA_*` pair is required only with
+`ETF_SOURCE=alpaca`.
+
+Optional: `ETF_SOURCE` (`yahoo` default, or `alpaca`), `ANTHROPIC_MODEL`
+(default `claude-sonnet-5`), `ANTHROPIC_MAX_TOKENS` (default `16000`),
+`ANTHROPIC_EFFORT` (default `medium`), `ALPACA_FEED` (`sip` default, or
+`iex`), `DRY_RUN` (see below).
 
 ### Install and run
 
@@ -151,6 +166,8 @@ A run is **degraded** when any of these is true:
 
 - Claude was unavailable, so the deterministic fallback was used
 - Claude's note was cut off, too short, too long, or missing sections
+  (`claude-sonnet-5` runs adaptive thinking by default and those tokens come
+  out of `ANTHROPIC_MAX_TOKENS`, so lowering it can reintroduce truncation)
 - A required macro series (VIX, HY OAS, 10Y) was unavailable
 - Any series was past its freshness window
 - Every ETF fetch failed
@@ -161,7 +178,9 @@ naming the specific reason, and a data-notes footer on the snapshot.
 ### Freshness windows
 
 Observations are checked against a per-source tolerance in **calendar** days:
-4 for equities and Yahoo series, 4 for FRED yields, 5 for the FRED OAS series.
+4 for equities and the Yahoo macro series, 5 for both FRED families. The FRED
+tolerance was raised from 4 after the 2026-09-15 run held Friday's yields on a
+Tuesday — exactly 4 days, so the next Monday holiday would have false-alarmed.
 
 There is deliberately **no market-holiday calendar** — that would need another
 dependency or a hardcoded list that goes out of date. Calendar-day tolerances
@@ -195,10 +214,12 @@ date, source and quality. Nothing downstream parses formatted text; only
 
 ## Known limitations
 
-- **`yfinance` is unofficial.** Six macro series depend on it and it can break
-  without warning.
+- **`yfinance` is unofficial.** Both the macro series and, since Stage 4, the
+  ETF closes depend on it, and it can break without warning. `ETF_SOURCE=alpaca`
+  is the escape hatch, at the cost of the IEX limitation above.
 - **No market-holiday calendar**, as described above.
-- **Price returns, not total returns** for ETFs.
+- **ETF changes are total returns** (split- and dividend-adjusted) while the
+  printed price is the raw close. They diverge only across a distribution.
 - **`D/D`, `1W`, `1M` are observation counts**, not calendar intervals.
 - **Credit and equity data can be from different sessions.** The report says so
   when it happens, but does not reconcile them.

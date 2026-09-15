@@ -33,8 +33,14 @@ def test_split_adjustment_is_requested(monkeypatch):
     assert sectors.ADJUSTMENT == sectors.Adjustment.SPLIT
 
 
-def test_sip_is_preferred_by_default():
+def test_sip_is_preferred_when_alpaca_is_used():
     assert sectors.PREFERRED_FEED == "sip"
+
+
+def test_alpaca_is_no_longer_the_default_source():
+    """A live run showed Alpaca refusing SIP and IEX returning a week of
+    unchanged closes for AIHY, so Yahoo is the default."""
+    assert sectors.ETF_SOURCE == "yahoo"
 
 
 def test_sip_is_used_when_entitled(monkeypatch):
@@ -88,28 +94,35 @@ def test_the_probe_costs_one_request_not_twenty_two(monkeypatch):
 
 # --- how the choice reaches the reader -------------------------------------
 
-def _snapshot(feed, feed_note=None):
+def _snapshot(price_source, note=None):
     snap = {key: [] for key in sectors.SECTOR_GROUP_KEYS}
-    snap["feed"] = feed
-    snap["feed_note"] = feed_note
+    snap["price_source"] = price_source
+    snap["price_source_note"] = note
     return snap
 
 
 def test_fallback_is_disclosed_in_the_report():
-    out = dashboard.format_dashboard({}, _snapshot("iex", "SIP feed unavailable (PermissionError); using IEX"))
+    out = dashboard.format_dashboard({}, _snapshot(
+        "alpaca:iex", "SIP feed unavailable (PermissionError); using IEX"))
     assert "SIP feed unavailable" in out
 
 
 def test_plain_iex_carries_its_own_warning():
-    out = dashboard.format_dashboard({}, _snapshot("iex"))
+    out = dashboard.format_dashboard({}, _snapshot("alpaca:iex"))
     assert "IEX-only" in out
 
 
 def test_sip_needs_no_warning():
-    out = dashboard.format_dashboard({}, _snapshot("sip"))
+    out = dashboard.format_dashboard({}, _snapshot("alpaca:sip"))
     assert "IEX-only" not in out
 
 
-def test_feed_keys_are_not_mistaken_for_etf_groups():
-    """all_metrics must not try to iterate the feed strings."""
-    assert sectors.all_metrics(_snapshot("sip")) == []
+def test_yahoo_needs_no_warning():
+    """Yahoo returns consolidated closes, so the IEX caveat does not apply."""
+    out = dashboard.format_dashboard({}, _snapshot("yahoo"))
+    assert "IEX-only" not in out
+
+
+def test_source_keys_are_not_mistaken_for_etf_groups():
+    """all_metrics must not try to iterate the source strings."""
+    assert sectors.all_metrics(_snapshot("yahoo")) == []

@@ -29,8 +29,11 @@ CHANGE_LEVEL = "level"
 # These tolerances absorb a weekend plus a holiday instead. The cost is that a
 # genuinely stale series can slip through for an extra day or two.
 MAX_AGE_MARKET_DAYS = 4    # equities and daily Yahoo series
-MAX_AGE_FRED_RATES = 4     # H.15 publishes the same business day
+MAX_AGE_FRED_RATES = 5     # H.15 reaches FRED about a business day later
 MAX_AGE_FRED_OAS = 5       # ICE BofA OAS routinely lags one business day
+# Both FRED tolerances were raised from 4 after a live run on 2026-09-15 held
+# Friday's yields on a Tuesday -- 4 days, exactly at the old limit, so the
+# next Monday holiday would have produced a false alarm.
 
 UP = "▲"
 DOWN = "▼"
@@ -145,8 +148,14 @@ class Metric:
                 if name == "D/D":
                     parts.append("D/D N/A")
                 continue
-            arrow = UP if change >= 0 else DOWN
-            parts.append(f"{arrow}{abs(change):.2f}{suffix} {name}")
+            # Judge direction on the value actually displayed: a change that
+            # rounds to 0.00 is flat, and "up zero" reads as a mistake.
+            shown = round(change, 2)
+            if shown == 0:
+                parts.append(f"{abs(shown):.2f}{suffix} {name}")
+            else:
+                arrow = UP if shown > 0 else DOWN
+                parts.append(f"{arrow}{abs(shown):.2f}{suffix} {name}")
         return " | ".join(parts)
 
     def format_as_of(self) -> str:

@@ -102,10 +102,10 @@ def build_data_notes(macro, sectors):
         notes.append("{} series past their freshness window ({})".format(
             len(stale), _name_list(stale)))
 
-    feed_note = sectors.get("feed_note")
-    if feed_note:
-        notes.append(feed_note)
-    elif sectors.get("feed") == "iex":
+    source_note = sectors.get("price_source_note")
+    if source_note:
+        notes.append(source_note)
+    elif sectors.get("price_source") == "alpaca:iex":
         notes.append("ETF closes are IEX-only (one exchange); thinly traded "
                      "funds may be unreliable")
 

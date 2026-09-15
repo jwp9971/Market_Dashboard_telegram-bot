@@ -10,6 +10,8 @@ import os
 import sys
 import types
 
+import pytest
+
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
@@ -63,3 +65,58 @@ for var in (
     "ALPACA_SECRET_KEY", "FRED_API_KEY", "ANTHROPIC_API_KEY",
 ):
     os.environ.pop(var, None)
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """
+    Hard guard: this suite must never reach the network.
+
+    Stage 4 moved the ETF fetch to yfinance, which is installed in a full local
+    venv but stubbed in CI -- so a test that forgot to patch its fetcher passed
+    locally by silently downloading real market data, and the suite went from
+    0.2s to 48s without failing. Patch sectors.fetch_yahoo_frame or
+    macro.get_yfinance_series in the test instead.
+    """
+    def blocked(*args, **kwargs):
+        raise AssertionError(
+            "test tried to reach the network -- patch the fetcher "
+            "(sectors.fetch_yahoo_frame / macro.get_yfinance_series) instead"
+        )
+
+    import requests
+    import yfinance
+    monkeypatch.setattr(yfinance, "download", blocked, raising=False)
+    monkeypatch.setattr(yfinance, "Ticker", blocked, raising=False)
+    monkeypatch.setattr(requests, "get", blocked, raising=False)
+
+
+class FakeSeries:
+    """Minimal pandas-Series stand-in for the fetch fakes below."""
+    def __init__(self, values, dates):
+        self._values = list(values)
+        self.index = list(dates)
+        self.iloc = self
+
+    def __len__(self):
+        return len(self._values)
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+    def dropna(self):
+        return self
+
+
+def fake_yahoo_frame(symbols, closes=None, as_of="2026-09-14", bars=25):
+    """Builds what fetch_yahoo_frame returns: {symbol: {field: Series}}."""
+    dates = [f"2026-08-{d:02d}" for d in range(1, bars)] + [as_of]
+    frame = {}
+    for i, symbol in enumerate(symbols):
+        base = (closes or {}).get(symbol, 100.0 + i)
+        series = [base * (1 + 0.001 * n) for n in range(len(dates))]
+        frame[symbol] = {
+            "Close": FakeSeries(series, dates),
+            "Adj Close": FakeSeries(series, dates),
+        }
+    return frame

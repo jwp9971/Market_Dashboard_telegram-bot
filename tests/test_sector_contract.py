@@ -62,10 +62,18 @@ def test_all_metrics_flattens_in_group_order(monkeypatch):
     assert flat[0].symbol == next(iter(sectors.ETF_GROUPS["macro"]))
 
 
-def test_sectors_no_longer_depends_on_alpaca_auth_for_fx():
-    """USD/KRW moved to macro.py; a failed Alpaca auth cannot reach it."""
+def test_fx_lives_in_macro_not_sectors():
+    """USD/KRW moved to macro.py in Stage 2, so an ETF-source failure cannot
+    take it out. (sectors.py uses yfinance itself now, so the old check that
+    it imported no yfinance no longer means anything.)"""
     import macro
-    source = open(sectors.__file__).read()
-    assert "USDKRW" not in source
-    assert "yfinance" not in source
+    assert "USDKRW" not in open(sectors.__file__).read()
     assert "USDKRW" in open(macro.__file__).read()
+
+
+def test_alpaca_is_optional(monkeypatch):
+    """The Yahoo path must not require alpaca-py to be installed."""
+    monkeypatch.setattr(sectors, "ALPACA_AVAILABLE", False)
+    monkeypatch.setattr(sectors, "ETF_SOURCE", "alpaca")
+    snapshot = sectors.get_sector_snapshot()
+    assert all(m.status == "error" for m in sectors.all_metrics(snapshot))

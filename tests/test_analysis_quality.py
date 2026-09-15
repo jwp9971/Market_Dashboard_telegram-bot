@@ -85,3 +85,53 @@ def test_api_exception_falls_back(monkeypatch):
     result = analyst.analyze_market({}, {})
     assert result["source"] == "fallback"
     assert any("rate limited" in w for w in result["warnings"])
+
+
+# --- Stage 4: the truncation root cause -----------------------------------
+
+def test_thinking_and_budget_are_declared_explicitly(monkeypatch):
+    """
+    claude-sonnet-5 runs adaptive thinking whether or not you ask for it, and
+    thinking tokens come out of max_tokens. At 4096 the reasoning consumed the
+    budget and the note was cut off mid-section while looking far shorter than
+    the limit -- twice in production, on 2026-09-09 and 2026-09-15.
+    """
+    captured = {}
+
+    class _Messages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Response(GOOD_NOTE)
+
+    class _Client:
+        def __init__(self, api_key=None):
+            self.messages = _Messages()
+
+    monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
+    monkeypatch.setattr(analyst, "ANTHROPIC_API_KEY", "test-key")
+
+    analyst.call_claude("prompt")
+
+    assert captured["thinking"] == {"type": "adaptive"}
+    assert captured["output_config"]["effort"] in (
+        "low", "medium", "high", "xhigh", "max")
+    assert captured["max_tokens"] >= 16000, (
+        "max_tokens must leave room for thinking plus a ~600 word note")
+
+
+def test_the_budget_is_far_above_the_note_length():
+    """A 600-word note is ~800 tokens; the rest of the budget is headroom for
+    adaptive thinking."""
+    assert analyst.ANTHROPIC_MAX_TOKENS >= 16000
+
+
+def test_effort_defaults_to_medium():
+    """A daily note over a fixed table of numbers is not a hard reasoning
+    problem, so the thinking depth should be proportionate."""
+    assert analyst.ANTHROPIC_EFFORT == "medium"
+
+
+def test_truncation_is_still_caught_if_it_somehow_happens(monkeypatch):
+    _fake_anthropic(monkeypatch, GOOD_NOTE, stop_reason="max_tokens")
+    result = analyst.analyze_market({}, {})
+    assert result["source"] == "claude_incomplete"
