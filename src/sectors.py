@@ -5,16 +5,29 @@ from datetime import datetime, timedelta, timezone
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.data.enums import DataFeed
+from alpaca.data.enums import Adjustment, DataFeed
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
 load_dotenv()
 
-from metrics import CHANGE_PCT, UNIT_USD, Metric, to_iso_date
+from metrics import (MAX_AGE_MARKET_DAYS, CHANGE_PCT, UNIT_USD, Metric,
+                     mark_staleness, to_iso_date)
 
 ALPACA_API_KEY = (os.getenv("ALPACA_API_KEY") or "").strip() or None
 ALPACA_SECRET_KEY = (os.getenv("ALPACA_SECRET_KEY") or "").strip() or None
+
+# IEX is a single exchange carrying a low single-digit share of consolidated
+# volume, so its daily close for a thinly traded ETF can be built from a
+# handful of prints -- or be missing. SIP is the consolidated tape. Prefer it,
+# and if the account is not entitled, fall back but say so in the report.
+FEEDS = {"sip": DataFeed.SIP, "iex": DataFeed.IEX}
+PREFERRED_FEED = (os.getenv("ALPACA_FEED") or "sip").strip().lower()
+
+# Raw prices show a split as a real move. Split adjustment is the minimum
+# correct policy; dividends are deliberately NOT adjusted, so these are price
+# returns, not total returns. That choice is documented in the README.
+ADJUSTMENT = Adjustment.SPLIT
 
 MACRO_ETFS = {
     # Indices
@@ -80,23 +93,47 @@ def get_alpaca_client():
         return None
 
 
-def get_etf_metric(client, symbol, label):
-    """Fetches one ETF and returns it as a Metric, including the observation
-    date of the bar the changes were computed from."""
-    metric = Metric(key=symbol, label=label, symbol=symbol,
-                    unit=UNIT_USD, change_kind=CHANGE_PCT, source="alpaca")
+def _fetch_bars(client, symbol, feed):
+    end = datetime.now(timezone.utc)
+    request = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Day,
+        start=end - timedelta(days=40),
+        end=end,
+        feed=feed,
+        adjustment=ADJUSTMENT,
+    )
+    return client.get_stock_bars(request).df
+
+
+def resolve_feed(client, probe_symbol="SPY"):
+    """
+    Decides the feed once per run with a single probe request, rather than
+    letting 22 fetches each fail and retry. Returns (feed_name, note); the
+    note is non-empty only when the preferred feed was refused.
+    """
+    if PREFERRED_FEED not in FEEDS:
+        return "iex", f"unknown ALPACA_FEED '{PREFERRED_FEED}'; using IEX"
+    if PREFERRED_FEED == "iex":
+        return "iex", None
     try:
-        # Explicit UTC: Alpaca treats a naive datetime as UTC, so a laptop in
-        # Korea and a UTC runner would otherwise request different windows.
-        end = datetime.now(timezone.utc)
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=end - timedelta(days=40),
-            end=end,
-            feed=DataFeed.IEX,
+        _fetch_bars(client, probe_symbol, FEEDS[PREFERRED_FEED])
+        return PREFERRED_FEED, None
+    except Exception as e:
+        return "iex", (
+            f"{PREFERRED_FEED.upper()} feed unavailable ({type(e).__name__}); "
+            "using IEX, a single exchange -- treat thinly traded ETF closes with caution"
         )
-        df = client.get_stock_bars(request).df
+
+
+def get_etf_metric(client, symbol, label, feed=None):
+    """Fetches one ETF as a Metric, including the observation date of the bar
+    the changes were computed from."""
+    metric = Metric(key=symbol, label=label, symbol=symbol,
+                    unit=UNIT_USD, change_kind=CHANGE_PCT, source="alpaca",
+                    max_age_days=MAX_AGE_MARKET_DAYS)
+    try:
+        df = _fetch_bars(client, symbol, feed or FEEDS["iex"])
 
         if df is None or df.empty:
             metric.error = "no bars returned"
@@ -132,28 +169,42 @@ def get_etf_metric(client, symbol, label):
         return metric
 
 
-def get_etf_group(client, group_key):
-    return [get_etf_metric(client, symbol, label)
+def get_etf_group(client, group_key, feed=None):
+    return [get_etf_metric(client, symbol, label, feed)
             for symbol, label in ETF_GROUPS[group_key].items()]
 
 
-def get_sector_snapshot():
-    """Returns {group_key: [Metric, ...]} for every key in SECTOR_GROUP_KEYS.
+def get_sector_snapshot(today=None):
+    """Returns {group_key: [Metric, ...]} for every key in SECTOR_GROUP_KEYS,
+    plus "feed" and "feed_note" describing which tape actually served the run.
 
     On an auth failure every ETF still appears, marked with an error, so the
-    report shows what is missing instead of going quiet.
+    report shows the outage per row instead of going quiet.
     """
     client = get_alpaca_client()
 
     if not client:
-        return {
+        snapshot = {
             key: [Metric(key=symbol, label=label, symbol=symbol,
                          source="alpaca", error="Alpaca auth failed")
                   for symbol, label in ETF_GROUPS[key].items()]
             for key in SECTOR_GROUP_KEYS
         }
+        snapshot["feed"] = None
+        snapshot["feed_note"] = None
+        return snapshot
 
-    return {key: get_etf_group(client, key) for key in SECTOR_GROUP_KEYS}
+    feed_name, feed_note = resolve_feed(client)
+    if feed_note:
+        print(f"Alpaca feed: {feed_note}")
+
+    snapshot = {key: get_etf_group(client, key, FEEDS[feed_name])
+                for key in SECTOR_GROUP_KEYS}
+    snapshot["feed"] = feed_name
+    snapshot["feed_note"] = feed_note
+
+    mark_staleness(all_metrics(snapshot), today)
+    return snapshot
 
 
 def all_metrics(sector_snapshot):
@@ -169,6 +220,6 @@ if __name__ == "__main__":
         print("✅ Auth successful\n")
         for key in SECTOR_GROUP_KEYS:
             print(f"{GROUP_TITLES[key]}:")
-            for metric in get_etf_group(client, key):
+            for metric in get_etf_group(client, key, FEEDS[feed_name]):
                 print(f"  {metric.render_line()}")
             print()

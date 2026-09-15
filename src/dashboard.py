@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from macro import get_macro_snapshot
-from metrics import Metric, as_of_range
+from metrics import Metric, as_of_range, stale_metrics
 from sectors import GROUP_TITLES, SECTOR_GROUP_KEYS, all_metrics, get_sector_snapshot
 from telegram_bot import send_long_message
 
@@ -15,6 +15,9 @@ from telegram_bot import send_long_message
 KST = timezone(timedelta(hours=9), "KST")
 
 RULE = "\u2501" * 20
+
+# Without these the report is not a market read, it is a list of gaps.
+REQUIRED_MACRO_KEYS = ("VIX", "HY OAS", "10Y")
 
 SECTION_ICONS = {
     "macro": "\U0001f30d",
@@ -57,18 +60,54 @@ def _pick(macro, *keys):
     return [macro[k] for k in keys if k in macro]
 
 
+def _all_metrics(macro, sectors):
+    return [m for m in macro.values() if hasattr(m, "status")] + all_metrics(sectors)
+
+
+def _name_list(metrics, limit=6):
+    names = ", ".join(m.symbol or m.label for m in metrics[:limit])
+    more = " +{} more".format(len(metrics) - limit) if len(metrics) > limit else ""
+    return names + more
+
+
+def is_data_degraded(macro, sectors):
+    """True when the report went out on data that should not be trusted as a
+    normal reading: a core input missing, or anything past its staleness
+    tolerance. main.py turns this into a non-zero exit."""
+    everything = _all_metrics(macro, sectors)
+    if any(m.status == "stale" for m in everything):
+        return True
+    for key in REQUIRED_MACRO_KEYS:
+        metric = macro.get(key)
+        if metric is None or not metric.is_usable:
+            return True
+    etfs = all_metrics(sectors)
+    return bool(etfs) and not any(m.is_usable for m in etfs)
+
+
 def build_data_notes(macro, sectors):
-    """A short, honest footer: what is missing, and whether the credit/rates
-    layer is from a different session than the equity layer."""
+    """A short, honest footer: what is missing or stale, which tape served the
+    ETF closes, and whether credit is from a different session than equities."""
     notes = []
 
-    everything = list(macro.values()) + all_metrics(sectors)
-    broken = [m for m in everything if not m.is_usable]
+    everything = _all_metrics(macro, sectors)
+    stale = stale_metrics(everything)
+    broken = [m for m in everything if m.status in ("missing", "error")]
+
     if broken:
-        names = ", ".join(m.symbol or m.label for m in broken[:6])
-        more = " +{} more".format(len(broken) - 6) if len(broken) > 6 else ""
-        notes.append("{} of {} series unavailable ({}{})".format(
-            len(broken), len(everything), names, more))
+        notes.append("{} of {} series unavailable ({})".format(
+            len(broken), len(everything), _name_list(broken)))
+
+    if stale:
+        notes.append("{} series past their freshness window ({})".format(
+            len(stale), _name_list(stale)))
+
+    feed_note = sectors.get("feed_note")
+    if feed_note:
+        notes.append(feed_note)
+    elif sectors.get("feed") == "iex":
+        notes.append("ETF closes are IEX-only (one exchange); thinly traded "
+                     "funds may be unreliable")
 
     # The prompt tells the analyst that credit leads equities. If the credit
     # data is a session behind, that instruction is being applied across a

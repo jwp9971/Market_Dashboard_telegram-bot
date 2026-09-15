@@ -44,7 +44,18 @@ _stub("alpaca.data")
 _stub("alpaca.data.historical", StockHistoricalDataClient=object)
 _stub("alpaca.data.requests", StockBarsRequest=object)
 _stub("alpaca.data.timeframe", TimeFrame=object)
-_stub("alpaca.data.enums", DataFeed=object)
+class _DataFeed:
+    IEX = "iex"
+    SIP = "sip"
+
+
+class _Adjustment:
+    RAW = "raw"
+    SPLIT = "split"
+    ALL = "all"
+
+
+_stub("alpaca.data.enums", DataFeed=_DataFeed, Adjustment=_Adjustment)
 
 # Never let a stray real credential reach a test run.
 for var in (

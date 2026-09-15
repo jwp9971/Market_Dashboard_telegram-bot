@@ -8,7 +8,7 @@ Numbers, units, dates and quality now stay structured all the way to the
 presentation boundary; only render() turns them into text.
 """
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 # How to render the value itself.
@@ -22,6 +22,15 @@ UNIT_RATIO = "ratio"
 # itself (percentage points, for yields and spreads already quoted in %).
 CHANGE_PCT = "pct"
 CHANGE_LEVEL = "level"
+
+# How many calendar days an observation may lag before it counts as stale.
+# Calendar days, not business days, on purpose: a business-day rule needs a
+# market-holiday calendar (a new dependency, or a hardcoded list that rots).
+# These tolerances absorb a weekend plus a holiday instead. The cost is that a
+# genuinely stale series can slip through for an extra day or two.
+MAX_AGE_MARKET_DAYS = 4    # equities and daily Yahoo series
+MAX_AGE_FRED_RATES = 4     # H.15 publishes the same business day
+MAX_AGE_FRED_OAS = 5       # ICE BofA OAS routinely lags one business day
 
 UP = "▲"
 DOWN = "▼"
@@ -63,6 +72,11 @@ class Metric:
     # False for derived values (a ratio, say) that legitimately have no change
     # series, so they render bare instead of claiming a missing D/D.
     tracks_changes: bool = True
+    # Tolerance for this metric's source; None means never judged stale.
+    max_age_days: Optional[int] = None
+    # Set by mark_staleness() so status stays a pure function of the record
+    # rather than silently depending on when it happens to be read.
+    stale: bool = False
 
     @property
     def status(self) -> str:
@@ -71,13 +85,32 @@ class Metric:
             return "error"
         if self.value is None:
             return "missing"
+        if self.stale:
+            return "stale"
         if self.day_change is None and self.tracks_changes:
             return "partial"
         return "ok"
 
     @property
     def is_usable(self) -> bool:
+        """Stale data is still shown -- a dated number beats a hidden one --
+        but it is not treated as a healthy input."""
         return self.status in ("ok", "partial")
+
+    def age_days(self, today: Optional[date] = None) -> Optional[int]:
+        if not self.as_of:
+            return None
+        try:
+            observed = datetime.strptime(self.as_of, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return None
+        return ((today or datetime.now(timezone.utc).date()) - observed).days
+
+    def is_stale_at(self, today: Optional[date] = None) -> bool:
+        if self.max_age_days is None or self.value is None:
+            return False
+        age = self.age_days(today)
+        return age is not None and age > self.max_age_days
 
     def change(self, horizon: str) -> Optional[float]:
         """Numeric change over one named horizon: 'D/D', '1W' or '1M'."""
@@ -131,7 +164,10 @@ class Metric:
         if self.value is None:
             return "N/A"
         changes = self.format_changes()
-        return f"{self.format_value()} ({changes})" if changes else self.format_value()
+        text = f"{self.format_value()} ({changes})" if changes else self.format_value()
+        if self.stale:
+            text += f"  \u26a0 STALE, as of {self.format_as_of()}"
+        return text
 
     def render_line(self) -> str:
         """'S&P 500 (SPY): $612.40 (▲0.42% D/D)'"""
@@ -158,3 +194,18 @@ def as_of_range(metrics):
     if not dates:
         return None, None
     return dates[0], dates[-1]
+
+
+def mark_staleness(metrics, today: Optional[date] = None):
+    """
+    Evaluates staleness once, at a known point, so `today` is injectable and
+    Metric.status never depends on when it is read. Returns the metrics.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    for metric in metrics:
+        metric.stale = metric.is_stale_at(today)
+    return metrics
+
+
+def stale_metrics(metrics):
+    return [m for m in metrics if m.status == "stale"]

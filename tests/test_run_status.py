@@ -43,3 +43,17 @@ def test_incomplete_is_visibly_labelled_in_the_message():
 
 def test_clean_run_adds_no_warning_banner():
     assert tb.build_source_note("claude") == ""
+
+
+# --- Stage 3: bad data is degraded even when Claude wrote a perfect note ----
+
+def test_stale_or_missing_data_is_degraded_even_with_a_clean_analysis():
+    assert main.decide_exit_code("claude", True, data_degraded=True) == main.EXIT_DEGRADED
+
+
+def test_healthy_data_and_a_clean_analysis_is_ok():
+    assert main.decide_exit_code("claude", True, data_degraded=False) == main.EXIT_OK
+
+
+def test_delivery_failure_still_outranks_data_problems():
+    assert main.decide_exit_code("claude", False, data_degraded=True) == main.EXIT_FAILED

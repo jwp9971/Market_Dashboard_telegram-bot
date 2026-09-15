@@ -1,5 +1,7 @@
 @echo off
-cd /d "C:\Users\jae_w\OneDrive\문서\Project"
-call venv\Scripts\activate
-python src/main.py
+REM Resolves paths from this file's own directory, so the repo can live
+REM anywhere and on any machine.
+cd /d "%~dp0"
+if exist "venv\Scripts\activate.bat" call "venv\Scripts\activate.bat"
+python src\main.py
 pause

@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 from analyst import analyze_market
-from dashboard import format_dashboard
+from dashboard import format_dashboard, is_data_degraded
 from telegram_bot import send_analysis_report
 
 # Exit codes. GitHub Actions marks the run red for anything non-zero, which
@@ -15,11 +15,16 @@ EXIT_FAILED = 1
 EXIT_DEGRADED = 2
 
 
-def decide_exit_code(source, delivered):
-    """Maps a run outcome to a process exit status."""
+def decide_exit_code(source, delivered, data_degraded=False):
+    """Maps a run outcome to a process exit status.
+
+    Degraded covers two different failures with the same consequence: the
+    commentary is not a complete Claude note, or the data underneath it should
+    not be read as a normal session.
+    """
     if not delivered:
         return EXIT_FAILED
-    if source != "claude":
+    if source != "claude" or data_degraded:
         return EXIT_DEGRADED
     return EXIT_OK
 
@@ -42,6 +47,13 @@ def run_daily_analysis():
     # so the Telegram snapshot always matches the commentary.
     dashboard_text = format_dashboard(macro_snapshot, sector_snapshot)
 
+    data_degraded = is_data_degraded(macro_snapshot, sector_snapshot)
+    if data_degraded:
+        warnings = list(warnings) + [
+            "Underlying data is incomplete or stale \u2014 see the data notes "
+            "at the end of the snapshot"
+        ]
+
     try:
         delivered = send_analysis_report(
             analysis_text, dashboard_text, source=source, warnings=warnings
@@ -55,7 +67,7 @@ def run_daily_analysis():
     for warning in warnings:
         print(f"Warning: {warning}")
 
-    return decide_exit_code(source, delivered), result
+    return decide_exit_code(source, delivered, data_degraded), result
 
 
 def main():
