@@ -1,0 +1,3 @@
+# Test-only dependencies. The suite is network-free and needs no API keys;
+# the heavy SDKs are stubbed in tests/conftest.py when absent.
+pytest>=8.0

@@ -1,19 +1,27 @@
 import os
+import re
 import sys
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from macro import get_macro_snapshot
-from sectors import get_sector_snapshot
+from sectors import SECTOR_GROUP_KEYS, get_sector_snapshot
 
 load_dotenv()
 
 ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip() or None
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+
+# Quality gates applied to Claude's output before it is presented as a
+# finished note. The prompt asks for a 600-word note in six sections; these
+# bounds are deliberately loose so only genuinely broken output is flagged.
+MIN_ANALYSIS_WORDS = 120
+MAX_ANALYSIS_WORDS = 900
+REQUIRED_SECTIONS = ("Macro Read", "Index Read", "Trend View", "Watch")
 
 SYSTEM_PROMPT = """You are a senior macro strategist with 15+ years across rates, FX, and cross-asset strategy. Write a daily note for a small circle of investors who want your actual view, not a hedged sell-side summary.
 
@@ -50,14 +58,73 @@ Format:
 Max 600 words total."""
 
 
-def _extract_change_direction(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return None
-    if "▲" in text:
-        return "up"
-    if "▼" in text:
-        return "down"
-    return None
+# Matches the change segments the formatters produce, e.g.
+#   "▲1.23% D/D"  "▼0.05pts 1W"  "▲2.00% 1M"
+_CHANGE_PATTERN = re.compile(
+    r"([▲▼])\s*([0-9]+(?:\.[0-9]+)?)\s*(?:%|pts)?\s*(D/D|1W|1M)"
+)
+
+
+def parse_changes(text: Any) -> Dict[str, float]:
+    """
+    Pulls signed numeric changes out of a formatted metric string, keyed by
+    horizon: {"D/D": -1.2, "1W": 0.4}.
+
+    This exists because collectors currently hand downstream code display
+    strings rather than numbers. It replaces the old behaviour of searching a
+    whole string for an arrow, which could not tell a daily move from a
+    monthly one and produced sign-inverted reads. Stage 2 (structured metric
+    records) removes the need for it entirely.
+    """
+    changes: Dict[str, float] = {}
+    for arrow, number, horizon in _CHANGE_PATTERN.findall(str(text or "")):
+        value = float(number)
+        changes[horizon] = value if arrow == "▲" else -value
+    return changes
+
+
+def _horizon(snapshot: Dict[str, Any], key: str, horizon: str = "D/D") -> Optional[float]:
+    return parse_changes(snapshot.get(key)).get(horizon)
+
+
+def _sector_breadth(sector_snapshot: Dict[str, Any], horizon: str = "D/D") -> Tuple[int, int]:
+    """Counts ETFs up and down over one named horizon, across every group."""
+    up = down = 0
+    for group_key in SECTOR_GROUP_KEYS:
+        for line in sector_snapshot.get(group_key, []) or []:
+            change = parse_changes(line).get(horizon)
+            if change is None:
+                continue
+            if change >= 0:
+                up += 1
+            else:
+                down += 1
+    return up, down
+
+
+def check_analysis_quality(text: Optional[str], truncated: bool = False) -> List[str]:
+    """Returns a list of problems with a model-written note. Empty == clean."""
+    problems: List[str] = []
+    if not text or not text.strip():
+        return ["Analysis text was empty"]
+
+    if truncated:
+        problems.append("Model output was cut off by the token limit")
+
+    word_count = len(text.split())
+    if word_count < MIN_ANALYSIS_WORDS:
+        problems.append(f"Analysis is unusually short ({word_count} words)")
+    elif word_count > MAX_ANALYSIS_WORDS:
+        problems.append(
+            f"Analysis ran to {word_count} words against a 600-word budget"
+        )
+
+    lowered = text.lower()
+    missing = [s for s in REQUIRED_SECTIONS if s.lower() not in lowered]
+    if missing:
+        problems.append("Missing section(s): " + ", ".join(missing))
+
+    return problems
 
 
 def _format_snapshot(snapshot: Dict[str, Any]) -> str:
@@ -88,16 +155,26 @@ Sector data:
 """
 
 
-def call_claude(prompt: str) -> Optional[str]:
+def call_claude(prompt: str) -> Dict[str, Any]:
+    """
+    Returns {"text": str|None, "truncated": bool, "error": str|None}.
+    The truncation flag is part of the return value rather than a printed
+    warning so callers cannot accidentally present a cut-off note as
+    a finished one.
+    """
+    result: Dict[str, Any] = {"text": None, "truncated": False, "error": None}
+
     if not ANTHROPIC_API_KEY:
+        result["error"] = "ANTHROPIC_API_KEY is not set"
         print("Claude call skipped: ANTHROPIC_API_KEY is not set in .env")
-        return None
+        return result
 
     try:
         import anthropic
     except ImportError:
+        result["error"] = "anthropic package is not installed"
         print("Claude call skipped: 'anthropic' package is not installed in this environment")
-        return None
+        return result
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -108,87 +185,161 @@ def call_claude(prompt: str) -> Optional[str]:
             messages=[{"role": "user", "content": prompt}],
         )
 
-        if response.stop_reason == "max_tokens":
-            print("WARNING: Claude response was cut off by max_tokens — consider raising the limit further")
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            result["truncated"] = True
+            print("WARNING: Claude response was cut off by max_tokens")
 
         pieces = []
         for block in getattr(response, "content", []) or []:
             text = getattr(block, "text", None)
             if text:
                 pieces.append(text)
-        return "\n".join(pieces).strip() or None
+        result["text"] = "\n".join(pieces).strip() or None
+        return result
     except Exception as exc:
+        result["error"] = str(exc)
         print(f"Claude call failed: {exc}")
-        return None
+        return result
 
 
 def generate_fallback_analysis(macro_snapshot: Dict[str, Any], sector_snapshot: Dict[str, Any]) -> str:
-    macro_text = []
-    for key, value in macro_snapshot.items():
-        if value is not None:
-            macro_text.append(f"{key}: {value}")
+    """
+    Deterministic stand-in used when Claude is unavailable.
 
-    sector_text = []
-    for market_name in ("us", "kr"):
-        for line in sector_snapshot.get(market_name, []):
-            sector_text.append(str(line))
+    Every rule below reads a named numeric horizon. It never infers a regime
+    from an arrow appearing somewhere in a string, because a single metric
+    line carries daily, weekly and monthly moves that routinely disagree.
+    When the inputs it needs are missing it says so instead of asserting a
+    regime.
+    """
+    macro_snapshot = macro_snapshot or {}
+    sector_snapshot = sector_snapshot or {}
 
-    read = "The data is still too mixed to force a clean read."
-    why = "Rates, credit, and sector breadth are not yet telling one consistent story."
-    what_doesnt_fit = ""
-    watch = "A clean confirmation from rates and credit would change this view."
+    vix_d = _horizon(macro_snapshot, "VIX")
+    hy_d = _horizon(macro_snapshot, "HY OAS")
+    ten_d = _horizon(macro_snapshot, "10Y Treasury")
+    vix_w = _horizon(macro_snapshot, "VIX", "1W")
+    hy_w = _horizon(macro_snapshot, "HY OAS", "1W")
 
-    vix = macro_snapshot.get("VIX") or ""
-    ten_y = macro_snapshot.get("10Y Treasury") or ""
-    hy_oas = macro_snapshot.get("HY OAS") or ""
-    sector_lines = " | ".join(sector_text)
+    up, down = _sector_breadth(sector_snapshot, "D/D")
+    total = up + down
 
-    if "▼" in str(vix) and "▲" in str(ten_y) and "▼" in str(hy_oas):
-        read = "Risk appetite is improving, but the move is still too narrow to trust."
-        why = "VIX is easing, long-end yields are rising, and credit spreads are tightening. That combination is constructive, but it needs confirmation from broader sector participation before it becomes durable."
-        watch = "A broader sector rally with rates and credit still cooperating would make this more convincing."
-    elif "▲" in str(vix) and "▼" in str(ten_y) and "▲" in str(hy_oas):
-        read = "The market is still under pressure from a fragile macro setup."
-        why = "Volatility is rising, yields are falling, and credit spreads are widening. That is not a clean bullish setup, and the sector data does not yet overcome it."
-        watch = "A reversal in credit spreads and a better sector breadth read would change this view."
-    elif sector_lines and "▲" in sector_lines and "▼" in sector_lines:
-        read = "The tape is showing dispersion rather than conviction."
-        why = "The sector proxies are not moving in one direction, so this looks more like rotation than a broad regime shift."
-        watch = "A sustained move in the same direction across multiple sectors would change the view."
+    have_core = vix_d is not None and hy_d is not None
+    if not have_core and total == 0:
+        return (
+            "Read: Insufficient data for a regime call.\n"
+            "Why: Neither the core macro series (VIX, HY OAS) nor any sector "
+            "changes were available for this run, so no directional statement "
+            "is supportable.\n"
+            "What doesn't fit: Not assessable without data.\n"
+            "Watch: Restore the data feed before reading anything into today's tape.\n"
+        )
+
+    def _dir(value, rising="rose", falling="fell"):
+        return rising if value >= 0 else falling
+
+    facts = []
+    if vix_d is not None:
+        facts.append(f"VIX {_dir(vix_d)} {abs(vix_d):.2f}% on the day")
+    if hy_d is not None:
+        facts.append(
+            f"HY OAS {_dir(hy_d, 'widened', 'tightened')} {abs(hy_d):.2f}pts on the day"
+        )
+    if ten_d is not None:
+        facts.append(f"the 10Y {_dir(ten_d)} {abs(ten_d):.2f}pts on the day")
+    if total:
+        facts.append(f"{up} of {total} tracked ETFs closed higher")
+
+    # Credit and volatility set the regime; both must agree before this
+    # claims one. Everything is stated as a same-day observation.
+    if have_core and vix_d < 0 and hy_d < 0:
+        read = "Risk appetite improved on the day, but one session is not a trend."
+        watch = "Confirmation would be credit continuing to tighten alongside broader sector participation."
+    elif have_core and vix_d > 0 and hy_d > 0:
+        read = "Risk was under pressure on the day, with volatility and credit agreeing."
+        watch = "A reversal in credit spreads would be the first sign this is easing."
+    elif have_core:
+        read = "Volatility and credit disagreed on the day, so there is no clean regime read."
+        watch = "Watch for VIX and HY OAS to move in the same direction before drawing a conclusion."
+    elif total and min(up, down) >= max(1, total // 4):
+        read = "The tape showed dispersion rather than conviction on the day."
+        watch = "A sustained move in the same direction across most sectors would change this."
     else:
-        read = "The market is still waiting for a cleaner signal."
-        why = "The macro data is not yet giving a clear regime shift, and the sector read is too mixed to force a stronger call."
+        read = "The available data does not support a regime call today."
         watch = "A clearer alignment between rates, credit, and sector leadership would change this view."
 
-    if "▲" in str(hy_oas) and "▼" in str(vix):
-        what_doesnt_fit = "Credit is still being cautious even as volatility eases."
+    why = ("; ".join(facts) + ".") if facts else "No usable same-day changes were available."
+
+    # A daily move that contradicts the week is the most useful thing a
+    # deterministic summary can surface.
+    doesnt_fit = "Nothing obvious stands out yet."
+    if vix_d is not None and vix_w is not None and (vix_d >= 0) != (vix_w >= 0):
+        doesnt_fit = (
+            f"Today's VIX move ({vix_d:+.2f}%) runs against the week "
+            f"({vix_w:+.2f}%)."
+        )
+    elif hy_d is not None and hy_w is not None and (hy_d >= 0) != (hy_w >= 0):
+        doesnt_fit = (
+            f"Today's HY OAS move ({hy_d:+.2f}pts) runs against the week "
+            f"({hy_w:+.2f}pts)."
+        )
+    elif have_core and (vix_d >= 0) != (hy_d >= 0):
+        doesnt_fit = "Volatility and credit are pointing in opposite directions today."
+
+    missing = [k for k in ("VIX", "HY OAS", "10Y Treasury")
+               if _horizon(macro_snapshot, k) is None]
+    coverage = ""
+    if missing:
+        coverage = f"\nData gaps: no same-day change for {', '.join(missing)}."
 
     return f"""Read: {read}
-Why: {why}
-What doesn't fit: {what_doesnt_fit if what_doesnt_fit else 'Nothing obvious stands out yet.'}
-Watch: {watch}
+Why (day-over-day only): {why}
+What doesn't fit: {doesnt_fit}
+Watch: {watch}{coverage}
 """
 
 
 def analyze_market(macro_snapshot: Optional[Dict[str, Any]] = None, sector_snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Returns the snapshots plus the analysis and an honest `source`:
+      "claude"            - a complete model note
+      "claude_incomplete" - a model note that failed a quality gate
+      "fallback"          - the deterministic summary
+    `warnings` carries the specific problems so delivery can label them.
+    """
     if macro_snapshot is None:
         macro_snapshot = get_macro_snapshot()
     if sector_snapshot is None:
         sector_snapshot = get_sector_snapshot()
 
     prompt = build_analysis_prompt(macro_snapshot, sector_snapshot)
-    claude_output = call_claude(prompt)
-    analysis_text = claude_output or generate_fallback_analysis(macro_snapshot, sector_snapshot)
+    claude = call_claude(prompt)
+
+    warnings: List[str] = []
+    if claude.get("text"):
+        problems = check_analysis_quality(claude["text"], truncated=claude.get("truncated", False))
+        analysis_text = claude["text"]
+        source = "claude_incomplete" if problems else "claude"
+        warnings = problems
+    else:
+        analysis_text = generate_fallback_analysis(macro_snapshot, sector_snapshot)
+        source = "fallback"
+        if claude.get("error"):
+            warnings = [f"Claude unavailable: {claude['error']}"]
 
     return {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "macro_snapshot": macro_snapshot,
         "sector_snapshot": sector_snapshot,
         "analysis": analysis_text,
-        "source": "claude" if claude_output else "fallback",
+        "source": source,
+        "warnings": warnings,
     }
 
 
 if __name__ == "__main__":
     result = analyze_market()
     print(result["analysis"])
+    print(f"\n[source={result['source']}]")
+    for warning in result["warnings"]:
+        print(f"[warning] {warning}")

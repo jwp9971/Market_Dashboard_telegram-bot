@@ -1,0 +1,32 @@
+name: Tests
+
+# Runs on every push and every pull request. No secrets, no network calls,
+# no API spend — the suite stubs the external SDKs.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Check every source file compiles
+        run: python -m compileall -q src
+
+      - name: Run tests
+        run: python -m pytest -q
