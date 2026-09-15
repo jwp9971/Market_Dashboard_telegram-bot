@@ -9,6 +9,9 @@ import yfinance as yf
 sys.path.insert(0, os.path.dirname(__file__))
 
 from metrics import (
+    MAX_AGE_FRED_OAS,
+    MAX_AGE_FRED_RATES,
+    MAX_AGE_MARKET_DAYS,
     CHANGE_LEVEL,
     CHANGE_PCT,
     UNIT_INDEX,
@@ -17,6 +20,7 @@ from metrics import (
     UNIT_RATIO,
     UNIT_USD,
     Metric,
+    mark_staleness,
     to_iso_date,
 )
 
@@ -155,21 +159,22 @@ def _yahoo_metric(key, label, ticker, unit=UNIT_INDEX):
         key=key, label=label, value=value,
         day_change=day, week_change=week, month_change=month,
         unit=unit, change_kind=CHANGE_PCT,
-        as_of=as_of, source="yahoo",
+        as_of=as_of, source="yahoo", max_age_days=MAX_AGE_MARKET_DAYS,
     )
 
 
-def _fred_metric(key, label, series_id, unit=UNIT_PERCENT):
+def _fred_metric(key, label, series_id, unit=UNIT_PERCENT,
+                 max_age_days=MAX_AGE_FRED_RATES):
     value, day, week, month, as_of = get_fred_series(series_id)
     return Metric(
         key=key, label=label, value=value,
         day_change=day, week_change=week, month_change=month,
         unit=unit, change_kind=CHANGE_LEVEL,
-        as_of=as_of, source="fred",
+        as_of=as_of, source="fred", max_age_days=max_age_days,
     )
 
 
-def get_macro_snapshot():
+def get_macro_snapshot(today=None):
     """Returns an ordered {key: Metric} mapping. Every metric is always
     present; a failed fetch produces a metric with status 'missing' so the
     gap is visible rather than silently absent."""
@@ -208,8 +213,12 @@ def get_macro_snapshot():
     )
 
     # Option-adjusted spreads are quoted in percent; a bare "2.91" is ambiguous.
-    snapshot["HY OAS"] = _fred_metric("HY OAS", "HY OAS", "BAMLH0A0HYM2")
-    snapshot["IG OAS"] = _fred_metric("IG OAS", "IG OAS", "BAMLC0A0CM")
+    # ICE BofA publishes these with a routine one-business-day lag, so they get
+    # a longer tolerance than the same-day H.15 yields.
+    snapshot["HY OAS"] = _fred_metric("HY OAS", "HY OAS", "BAMLH0A0HYM2",
+                                      max_age_days=MAX_AGE_FRED_OAS)
+    snapshot["IG OAS"] = _fred_metric("IG OAS", "IG OAS", "BAMLC0A0CM",
+                                      max_age_days=MAX_AGE_FRED_OAS)
 
     snapshot["DXY"] = _yahoo_metric("DXY", "Dollar Index", "DX-Y.NYB")
 
@@ -217,6 +226,7 @@ def get_macro_snapshot():
     # where it used to be unreachable whenever Alpaca credentials failed.
     snapshot["USDKRW"] = _yahoo_metric("USDKRW", "USD/KRW", "USDKRW=X", unit=UNIT_KRW)
 
+    mark_staleness(snapshot.values(), today)
     return snapshot
 
 
