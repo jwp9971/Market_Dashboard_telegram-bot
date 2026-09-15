@@ -3,5 +3,6 @@ venv/
 .env
 __pycache__/
 *.pyc
-data/*.db.pytest_cache/
+data/*.db
+.pytest_cache/
 .coverage
