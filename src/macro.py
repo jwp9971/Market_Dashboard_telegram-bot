@@ -1,19 +1,28 @@
 import math
 import os
+import sys
 
 import requests
 from dotenv import load_dotenv
 import yfinance as yf
 
+sys.path.insert(0, os.path.dirname(__file__))
+
+from metrics import (
+    CHANGE_LEVEL,
+    CHANGE_PCT,
+    UNIT_INDEX,
+    UNIT_KRW,
+    UNIT_PERCENT,
+    UNIT_RATIO,
+    UNIT_USD,
+    Metric,
+    to_iso_date,
+)
+
 load_dotenv()
 
 FRED_API_KEY = (os.getenv("FRED_API_KEY") or "").strip() or None
-
-
-def _format_number(value, digits=2):
-    if value is None:
-        return "N/A"
-    return f"{value:.{digits}f}"
 
 
 def _coerce_numeric(value):
@@ -30,39 +39,6 @@ def _coerce_numeric(value):
     return number
 
 
-def _arrow(value):
-    return "▲" if value is not None and value >= 0 else "▼"
-
-
-def format_pct_change_line(day_change, week_change=None, month_change=None):
-    parts = []
-    parts.append(f"{_arrow(day_change)}{abs(day_change):.2f}% D/D" if day_change is not None else "D/D N/A")
-    if week_change is not None:
-        parts.append(f"{_arrow(week_change)}{abs(week_change):.2f}% 1W")
-    if month_change is not None:
-        parts.append(f"{_arrow(month_change)}{abs(month_change):.2f}% 1M")
-    return " | ".join(parts)
-
-
-def format_level_change_line(day_change, week_change=None, month_change=None, unit="pts"):
-    parts = []
-    parts.append(f"{_arrow(day_change)}{abs(day_change):.2f}{unit} D/D" if day_change is not None else "D/D N/A")
-    if week_change is not None:
-        parts.append(f"{_arrow(week_change)}{abs(week_change):.2f}{unit} 1W")
-    if month_change is not None:
-        parts.append(f"{_arrow(month_change)}{abs(month_change):.2f}{unit} 1M")
-    return " | ".join(parts)
-
-
-def format_metric_value(current, change_line=None, prefix="", suffix=""):
-    if current is None:
-        return "N/A"
-    base = f"{prefix}{_format_number(current)}{suffix}"
-    if change_line:
-        return f"{base} ({change_line})"
-    return base
-
-
 def _pct_change_from_series(closes, offset):
     try:
         if len(closes) <= offset:
@@ -76,11 +52,26 @@ def _pct_change_from_series(closes, offset):
         return None
 
 
+def _level_change(values, offset):
+    if len(values) <= offset:
+        return None
+    return round(values[0] - values[offset], 2)
+
+
+def _subtract(a, b):
+    """Difference of two optional numbers, or None if either is missing."""
+    if a is None or b is None:
+        return None
+    return round(a - b, 2)
+
+
 def get_yfinance_series(ticker):
     """
-    Returns (current, day_change_pct, week_change_pct, month_change_pct).
-    Pulls 3 months of daily history in a single call so day/week/month
-    changes all come from one fetch — no extra API calls versus before.
+    Returns (current, day_pct, week_pct, month_pct, as_of).
+
+    Pulls 3 months of daily history in one call so day/week/month changes all
+    come from one fetch. The observation date is carried through rather than
+    discarded, so the report can disclose how current each series actually is.
     """
     try:
         ticker_obj = yf.Ticker(ticker)
@@ -91,37 +82,31 @@ def get_yfinance_series(ticker):
             closes = history["Close"]
             current = _coerce_numeric(closes.iloc[-1])
             if current is not None:
-                day_change = _pct_change_from_series(closes, 1)
-                week_change = _pct_change_from_series(closes, 5)
-                month_change = _pct_change_from_series(closes, 21)
-                return current, day_change, week_change, month_change
+                return (
+                    current,
+                    _pct_change_from_series(closes, 1),
+                    _pct_change_from_series(closes, 5),
+                    _pct_change_from_series(closes, 21),
+                    to_iso_date(closes.index[-1]),
+                )
 
-        # Fallback if history is unavailable — at least return current price
+        # Last resort: a live quote with no history to derive changes from.
         info = ticker_obj.fast_info
-        current = _coerce_numeric(info.last_price)
-        return current, None, None, None
+        return _coerce_numeric(info.last_price), None, None, None, None
     except Exception as e:
         print(f"Error fetching {ticker}: {e}")
-        return None, None, None, None
-
-
-def _level_change(values, offset):
-    if len(values) <= offset:
-        return None
-    return round(values[0] - values[offset], 2)
+        return None, None, None, None, None
 
 
 def get_fred_series(series_id, limit=40):
     """
-    Returns (current, day_delta, week_delta, month_delta) as level
-    changes (percentage points), since FRED rate/spread series are
-    already expressed in %. Fetches up to `limit` recent observations
-    in one call and derives day/week/month from valid (non-missing)
-    values — still one API call per series, same as before.
+    Returns (current, day_delta, week_delta, month_delta, as_of) as level
+    changes in percentage points, since FRED rate/spread series are already
+    expressed in %. One API call per series.
     """
     if not FRED_API_KEY:
         print("FRED_API_KEY is not set; skipping FRED series fetch for", series_id)
-        return None, None, None, None
+        return None, None, None, None, None
 
     try:
         url = "https://api.stlouisfed.org/fred/series/observations"
@@ -134,71 +119,108 @@ def get_fred_series(series_id, limit=40):
         }
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
-        data = response.json()
-        observations = data.get("observations", [])
+        observations = response.json().get("observations", [])
 
-        values = []
+        values, dates = [], []
         for obs in observations:
-            val = _coerce_numeric(obs.get("value"))
-            if val is not None:
-                values.append(val)
+            value = _coerce_numeric(obs.get("value"))
+            if value is not None:
+                values.append(value)
+                dates.append(obs.get("date"))
 
         if not values:
-            return None, None, None, None
+            return None, None, None, None, None
 
-        current = values[0]
-        day_change = _level_change(values, 1)
-        week_change = _level_change(values, 5)
-        month_change = _level_change(values, 21)
-
-        return current, day_change, week_change, month_change
+        return (
+            values[0],
+            _level_change(values, 1),
+            _level_change(values, 5),
+            _level_change(values, 21),
+            to_iso_date(dates[0]),
+        )
     except requests.RequestException as e:
-        print(f"Error fetching FRED {series_id}: {e}")
-        return None, None, None, None
+        # The request URL carries the API key, and requests puts the URL in
+        # its exception text -- log the status and series only.
+        status = getattr(getattr(e, "response", None), "status_code", "no response")
+        print(f"Error fetching FRED {series_id}: HTTP {status}")
+        return None, None, None, None, None
     except Exception as e:
-        print(f"Unexpected error fetching FRED {series_id}: {e}")
-        return None, None, None, None
+        print(f"Unexpected error fetching FRED {series_id}: {type(e).__name__}")
+        return None, None, None, None, None
+
+
+def _yahoo_metric(key, label, ticker, unit=UNIT_INDEX):
+    value, day, week, month, as_of = get_yfinance_series(ticker)
+    return Metric(
+        key=key, label=label, value=value,
+        day_change=day, week_change=week, month_change=month,
+        unit=unit, change_kind=CHANGE_PCT,
+        as_of=as_of, source="yahoo",
+    )
+
+
+def _fred_metric(key, label, series_id, unit=UNIT_PERCENT):
+    value, day, week, month, as_of = get_fred_series(series_id)
+    return Metric(
+        key=key, label=label, value=value,
+        day_change=day, week_change=week, month_change=month,
+        unit=unit, change_kind=CHANGE_LEVEL,
+        as_of=as_of, source="fred",
+    )
 
 
 def get_macro_snapshot():
+    """Returns an ordered {key: Metric} mapping. Every metric is always
+    present; a failed fetch produces a metric with status 'missing' so the
+    gap is visible rather than silently absent."""
     snapshot = {}
 
-    vix, vix_d, vix_w, vix_m = get_yfinance_series("^VIX")
-    snapshot["VIX"] = format_metric_value(vix, format_pct_change_line(vix_d, vix_w, vix_m))
+    snapshot["VIX"] = _yahoo_metric("VIX", "VIX", "^VIX")
+    snapshot["WTI"] = _yahoo_metric("WTI", "WTI Crude", "CL=F", unit=UNIT_USD)
 
-    wti, wti_d, wti_w, wti_m = get_yfinance_series("CL=F")
-    snapshot["WTI"] = format_metric_value(wti, format_pct_change_line(wti_d, wti_w, wti_m), prefix="$")
+    gold = _yahoo_metric("Gold", "Gold", "GC=F", unit=UNIT_USD)
+    copper = _yahoo_metric("Copper", "Copper", "HG=F", unit=UNIT_USD)
+    snapshot["Gold"] = gold
+    snapshot["Copper"] = copper
+    snapshot["Gold/Copper"] = Metric(
+        key="Gold/Copper", label="Gold/Copper Ratio",
+        value=(round(gold.value / copper.value, 2)
+               if gold.value is not None and copper.value else None),
+        unit=UNIT_RATIO, tracks_changes=False,
+        as_of=gold.as_of or copper.as_of, source="yahoo",
+    )
 
-    gold, gold_d, gold_w, gold_m = get_yfinance_series("GC=F")
-    copper, copper_d, copper_w, copper_m = get_yfinance_series("HG=F")
-    snapshot["Gold"] = format_metric_value(gold, format_pct_change_line(gold_d, gold_w, gold_m), prefix="$")
-    snapshot["Copper"] = format_metric_value(copper, format_pct_change_line(copper_d, copper_w, copper_m), prefix="$")
-    if gold is not None and copper:
-        snapshot["Gold/Copper Ratio"] = round(gold / copper, 2)
+    ten_y = _fred_metric("10Y", "10Y Treasury", "DGS10")
+    two_y = _fred_metric("2Y", "2Y Treasury", "DGS2")
+    snapshot["10Y"] = ten_y
+    snapshot["2Y"] = two_y
 
-    ten_y, ten_y_d, ten_y_w, ten_y_m = get_fred_series("DGS10")
-    two_y, two_y_d, two_y_w, two_y_m = get_fred_series("DGS2")
-    snapshot["10Y Treasury"] = format_metric_value(ten_y, format_level_change_line(ten_y_d, ten_y_w, ten_y_m), suffix="%")
-    snapshot["2Y Treasury"] = format_metric_value(two_y, format_level_change_line(two_y_d, two_y_w, two_y_m), suffix="%")
+    # A spread's change is the difference of its legs' changes, so 2s10s now
+    # carries a real change line instead of a bare level.
+    snapshot["2s10s"] = Metric(
+        key="2s10s", label="2s10s Spread",
+        value=_subtract(ten_y.value, two_y.value),
+        day_change=_subtract(ten_y.day_change, two_y.day_change),
+        week_change=_subtract(ten_y.week_change, two_y.week_change),
+        month_change=_subtract(ten_y.month_change, two_y.month_change),
+        unit=UNIT_PERCENT, change_kind=CHANGE_LEVEL,
+        as_of=ten_y.as_of or two_y.as_of, source="fred",
+    )
 
-    if ten_y is not None and two_y is not None:
-        spread = round(ten_y - two_y, 2)
-        snapshot["2s10s Spread"] = f"{spread:.2f}%"
+    # Option-adjusted spreads are quoted in percent; a bare "2.91" is ambiguous.
+    snapshot["HY OAS"] = _fred_metric("HY OAS", "HY OAS", "BAMLH0A0HYM2")
+    snapshot["IG OAS"] = _fred_metric("IG OAS", "IG OAS", "BAMLC0A0CM")
 
-    hy_oas, hy_d, hy_w, hy_m = get_fred_series("BAMLH0A0HYM2")
-    snapshot["HY OAS"] = format_metric_value(hy_oas, format_level_change_line(hy_d, hy_w, hy_m))
+    snapshot["DXY"] = _yahoo_metric("DXY", "Dollar Index", "DX-Y.NYB")
 
-    ig_oas, ig_d, ig_w, ig_m = get_fred_series("BAMLC0A0CM")
-    snapshot["IG OAS"] = format_metric_value(ig_oas, format_level_change_line(ig_d, ig_w, ig_m))
-
-    dxy, dxy_d, dxy_w, dxy_m = get_yfinance_series("DX-Y.NYB")
-    snapshot["Dollar Index"] = format_metric_value(dxy, format_pct_change_line(dxy_d, dxy_w, dxy_m))
+    # USD/KRW lives here with the other Yahoo series rather than in sectors.py,
+    # where it used to be unreachable whenever Alpaca credentials failed.
+    snapshot["USDKRW"] = _yahoo_metric("USDKRW", "USD/KRW", "USDKRW=X", unit=UNIT_KRW)
 
     return snapshot
 
 
 if __name__ == "__main__":
-    data = get_macro_snapshot()
-    print("\n📊 Macro Snapshot:")
-    for key, value in data.items():
-        print(f"  {key}: {value}")
+    for metric in get_macro_snapshot().values():
+        stamp = f"  [as of {metric.format_as_of()}]" if metric.as_of else ""
+        print(f"  {metric.render_line()}{stamp}")

@@ -1,0 +1,160 @@
+"""
+One structured record per measurement.
+
+Collectors used to turn numbers into display strings immediately, and every
+downstream consumer then had to read those strings back -- which is how the
+fallback ended up searching for arrow glyphs and inverting the day's signal.
+Numbers, units, dates and quality now stay structured all the way to the
+presentation boundary; only render() turns them into text.
+"""
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Any, Optional
+
+# How to render the value itself.
+UNIT_USD = "usd"
+UNIT_KRW = "krw"
+UNIT_PERCENT = "percent"
+UNIT_INDEX = "index"
+UNIT_RATIO = "ratio"
+
+# How to interpret the changes: a percentage return, or a move in the level
+# itself (percentage points, for yields and spreads already quoted in %).
+CHANGE_PCT = "pct"
+CHANGE_LEVEL = "level"
+
+UP = "▲"
+DOWN = "▼"
+
+HORIZONS = (("D/D", "day_change"), ("1W", "week_change"), ("1M", "month_change"))
+
+
+def to_iso_date(value: Any) -> Optional[str]:
+    """Normalises whatever a data source hands back into 'YYYY-MM-DD'."""
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return (value.date() if isinstance(value, datetime) else value).isoformat()
+    text = str(value).strip()
+    if not text:
+        return None
+    # Timestamps arrive as '2026-09-12T00:00:00-04:00' or '2026-09-12 00:00:00'.
+    for separator in ("T", " "):
+        if separator in text:
+            text = text.split(separator, 1)[0]
+            break
+    return text or None
+
+
+@dataclass
+class Metric:
+    key: str
+    label: str
+    value: Optional[float] = None
+    day_change: Optional[float] = None
+    week_change: Optional[float] = None
+    month_change: Optional[float] = None
+    unit: str = UNIT_INDEX
+    change_kind: str = CHANGE_PCT
+    as_of: Optional[str] = None
+    source: str = ""
+    symbol: str = ""
+    error: Optional[str] = None
+    # False for derived values (a ratio, say) that legitimately have no change
+    # series, so they render bare instead of claiming a missing D/D.
+    tracks_changes: bool = True
+
+    @property
+    def status(self) -> str:
+        """Derived, never set by hand, so it cannot drift from the data."""
+        if self.error:
+            return "error"
+        if self.value is None:
+            return "missing"
+        if self.day_change is None and self.tracks_changes:
+            return "partial"
+        return "ok"
+
+    @property
+    def is_usable(self) -> bool:
+        return self.status in ("ok", "partial")
+
+    def change(self, horizon: str) -> Optional[float]:
+        """Numeric change over one named horizon: 'D/D', '1W' or '1M'."""
+        for name, attribute in HORIZONS:
+            if name == horizon:
+                return getattr(self, attribute)
+        return None
+
+    # --- presentation boundary ------------------------------------------
+
+    def format_value(self) -> str:
+        if self.value is None:
+            return "N/A"
+        if self.unit == UNIT_USD:
+            return f"${self.value:,.2f}"
+        if self.unit == UNIT_KRW:
+            return f"₩{self.value:,.1f}"
+        if self.unit == UNIT_PERCENT:
+            return f"{self.value:.2f}%"
+        if self.unit == UNIT_RATIO:
+            return f"{self.value:,.1f}"
+        return f"{self.value:,.2f}"
+
+    def format_changes(self) -> str:
+        if not self.tracks_changes:
+            return ""
+        suffix = "%" if self.change_kind == CHANGE_PCT else "pts"
+        parts = []
+        for name, attribute in HORIZONS:
+            change = getattr(self, attribute)
+            if change is None:
+                if name == "D/D":
+                    parts.append("D/D N/A")
+                continue
+            arrow = UP if change >= 0 else DOWN
+            parts.append(f"{arrow}{abs(change):.2f}{suffix} {name}")
+        return " | ".join(parts)
+
+    def format_as_of(self) -> str:
+        if not self.as_of:
+            return ""
+        try:
+            return datetime.strptime(self.as_of, "%Y-%m-%d").strftime("%b %d")
+        except (ValueError, TypeError):
+            return str(self.as_of)
+
+    def render(self) -> str:
+        """'4.10% (▲0.05pts D/D | ▼0.20pts 1W)'"""
+        if self.error:
+            return f"N/A ({self.error})"
+        if self.value is None:
+            return "N/A"
+        changes = self.format_changes()
+        return f"{self.format_value()} ({changes})" if changes else self.format_value()
+
+    def render_line(self) -> str:
+        """'S&P 500 (SPY): $612.40 (▲0.42% D/D)'"""
+        name = f"{self.label} ({self.symbol})" if self.symbol else self.label
+        return f"{name}: {self.render()}"
+
+
+def missing(key, label, source="", symbol="", error=None, **kwargs) -> Metric:
+    """A metric a collector could not produce, kept in place so the report
+    shows the gap rather than silently dropping the row."""
+    return Metric(key=key, label=label, source=source, symbol=symbol,
+                  error=error, **kwargs)
+
+
+def latest_as_of(metrics) -> Optional[str]:
+    dates = [m.as_of for m in metrics if getattr(m, "as_of", None)]
+    return max(dates) if dates else None
+
+
+def as_of_range(metrics):
+    """(earliest, latest) observation dates across a set of metrics, so a
+    report can disclose when its inputs are not from the same session."""
+    dates = sorted({m.as_of for m in metrics if getattr(m, "as_of", None)})
+    if not dates:
+        return None, None
+    return dates[0], dates[-1]
