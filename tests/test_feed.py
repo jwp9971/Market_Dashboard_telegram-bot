@@ -37,10 +37,11 @@ def test_sip_is_preferred_when_alpaca_is_used():
     assert sectors.PREFERRED_FEED == "sip"
 
 
-def test_alpaca_is_no_longer_the_default_source():
-    """A live run showed Alpaca refusing SIP and IEX returning a week of
-    unchanged closes for AIHY, so Yahoo is the default."""
-    assert sectors.ETF_SOURCE == "yahoo"
+def test_alpaca_is_the_default_source():
+    """Yahoo fixed thinly traded names but lagged a full session at the hour
+    this report runs, which is wrong on all 22 rows rather than one. Freshness
+    wins; the lag itself is now reported either way."""
+    assert sectors.ETF_SOURCE == "alpaca"
 
 
 def test_sip_is_used_when_entitled(monkeypatch):

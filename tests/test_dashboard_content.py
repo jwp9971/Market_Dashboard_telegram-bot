@@ -8,10 +8,17 @@ footer about what was missing or out of sync.
 """
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 import dashboard
 import sectors
 from metrics import (CHANGE_LEVEL, CHANGE_PCT, UNIT_KRW, UNIT_PERCENT,
                      UNIT_RATIO, UNIT_USD, Metric)
+
+
+# A fixed instant so the session-lag check is deterministic: Monday 01:00 UTC,
+# whose last completed session is the preceding Friday (Sep 11).
+NOW = datetime(2026, 9, 14, 1, 0, tzinfo=timezone.utc)
 
 
 def _macro(**overrides):
@@ -62,24 +69,24 @@ def _sectors(as_of="2026-09-12"):
 def test_ig_oas_and_dollar_index_are_shown():
     """Both were fetched and sent to Claude but never displayed, so the
     commentary could cite a number the reader could not see."""
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     assert "IG OAS: 0.92" in out
     assert "Dollar Index: 101.25" in out
 
 
 def test_usd_krw_has_a_real_change_line():
     """It used to render as a bare arrow with no magnitude and no 1W/1M."""
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     assert "USD/KRW: ₩1,380.5 (▲0.30% D/D | ▼0.80% 1W | ▲1.20% 1M)" in out
 
 
 def test_the_curve_has_a_change_line():
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     assert "2s10s Spread: 0.38% (▲0.03pts D/D)" in out
 
 
 def test_every_tracked_etf_appears():
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     for key in sectors.SECTOR_GROUP_KEYS:
         for symbol in sectors.ETF_GROUPS[key]:
             assert f"({symbol})" in out
@@ -95,7 +102,7 @@ def test_report_date_is_korean_not_utc():
 
 
 def test_as_of_is_stated_once_in_the_header_when_inputs_agree():
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     assert "Market data as of Sep 12" in out
     # Not repeated on every section heading.
     assert out.count("as of Sep 12") == 1
@@ -105,7 +112,7 @@ def test_a_section_out_of_step_is_labelled_even_though_others_are_not():
     macro = _macro()
     for key in ("10Y", "2Y", "2s10s", "HY OAS", "IG OAS"):
         macro[key].as_of = "2026-09-11"
-    out = dashboard.format_dashboard(macro, _sectors())
+    out = dashboard.format_dashboard(macro, _sectors(), now=NOW)
     rates_heading = next(l for l in out.splitlines() if "RATES & CREDIT" in l)
     fx_heading = next(l for l in out.splitlines() if "FX & DOLLAR" in l)
     assert "as of Sep 11" in rates_heading
@@ -116,20 +123,20 @@ def test_mixed_dates_are_shown_as_a_range():
     macro = _macro(**{"HY OAS": Metric(key="HY OAS", label="HY OAS", value=3.2,
                                        day_change=0.1, change_kind=CHANGE_LEVEL,
                                        as_of="2026-09-10")})
-    out = dashboard.format_dashboard(macro, _sectors())
+    out = dashboard.format_dashboard(macro, _sectors(), now=NOW)
     assert "as of Sep 10–Sep 12" in out
 
 
 def test_missing_series_are_named_in_the_footer():
     macro = _macro(**{"IG OAS": Metric(key="IG OAS", label="IG OAS")})
-    out = dashboard.format_dashboard(macro, _sectors())
+    out = dashboard.format_dashboard(macro, _sectors(), now=NOW)
     assert "Data notes:" in out
     assert "unavailable" in out
     assert "IG OAS" in out.split("Data notes:")[1]
 
 
 def test_no_footer_when_everything_is_healthy():
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     assert "Data notes:" not in out
 
 
@@ -139,14 +146,14 @@ def test_credit_lagging_equities_is_disclosed():
     stale = {k: v for k, v in _macro().items()}
     for key in ("10Y", "2Y", "HY OAS", "IG OAS"):
         stale[key].as_of = "2026-09-11"
-    out = dashboard.format_dashboard(stale, _sectors(as_of="2026-09-12"))
+    out = dashboard.format_dashboard(stale, _sectors(as_of="2026-09-12"), now=NOW)
     assert "not the same session" in out
 
 
 def test_auth_failure_produces_a_readable_report(monkeypatch):
     monkeypatch.setattr(sectors, "ETF_SOURCE", "alpaca")
     monkeypatch.setattr(sectors, "ALPACA_API_KEY", None)
-    out = dashboard.format_dashboard(_macro(), sectors.get_sector_snapshot())
+    out = dashboard.format_dashboard(_macro(), sectors.get_sector_snapshot(), now=NOW)
     assert "Daily Market Dashboard" in out
     assert "N/A (Alpaca auth failed)" in out
     assert "22 of 34 series unavailable" in out
@@ -161,21 +168,21 @@ def test_report_fits_a_single_telegram_message():
     """A healthy report should not need splitting; if it grows past the
     limit the splitter handles it, but one message is the intent."""
     import telegram_bot as tb
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     parts = tb.build_message_parts(f"\U0001f4ca Data Snapshot\n\n{out}")
     assert len(parts) == 1, f"report is {len(out)} chars and now splits"
 
 
 def test_derived_ratio_renders_without_a_phantom_change_line():
     """Gold/Copper has no change series, so "(D/D N/A)" would be misleading."""
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     line = next(l for l in out.splitlines() if "Gold/Copper" in l)
     assert line == "\u2022 Gold/Copper Ratio: 581.1"
 
 
 def test_credit_spreads_show_their_percent_unit():
     """A bare "2.91" does not say whether it is percent or basis points."""
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     assert "HY OAS: 3.20%" in out
     assert "IG OAS: 0.92%" in out
 
@@ -188,7 +195,7 @@ def test_macro_rows_do_not_leak_internal_series_ids(monkeypatch):
     monkeypatch.setattr(macro_module, "get_yfinance_series",
                         lambda t: (1.0, 0.1, None, None, "2026-09-12"))
 
-    out = dashboard.format_dashboard(macro_module.get_macro_snapshot(), {})
+    out = dashboard.format_dashboard(macro_module.get_macro_snapshot(), {}, now=NOW)
     for internal in ("BAMLH0A0HYM2", "BAMLC0A0CM", "DGS10", "DGS2",
                      "^VIX", "DX-Y.NYB", "USDKRW=X", "CL=F"):
         assert internal not in out, f"{internal} leaked into the report"
@@ -196,6 +203,6 @@ def test_macro_rows_do_not_leak_internal_series_ids(monkeypatch):
 
 def test_etf_rows_keep_their_ticker():
     """The ticker is reader-facing for ETFs, unlike a FRED series id."""
-    out = dashboard.format_dashboard(_macro(), _sectors())
+    out = dashboard.format_dashboard(_macro(), _sectors(), now=NOW)
     assert "S&P 500 (SPY):" in out
     assert "Semiconductors (SOXX):" in out

@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from macro import get_macro_snapshot
-from metrics import Metric, as_of_range, stale_metrics
+from metrics import (Metric, as_of_range, last_expected_session,
+                     sessions_behind, stale_metrics)
 from sectors import GROUP_TITLES, SECTOR_GROUP_KEYS, all_metrics, get_sector_snapshot
 from telegram_bot import send_long_message
 
@@ -19,6 +20,11 @@ RULE = "\u2501" * 20
 # Without these the report is not a market read, it is a list of gaps.
 REQUIRED_MACRO_KEYS = ("VIX", "HY OAS", "10Y")
 
+# A single market holiday makes the ETF data look one session behind, so one
+# is worth stating but not worth failing on. No single holiday can produce a
+# two-session gap, so that is a real lag.
+SESSION_LAG_DEGRADES_AT = 2
+
 SECTION_ICONS = {
     "macro": "\U0001f30d",
     "broad_industry": "\U0001f3ed",
@@ -27,7 +33,10 @@ SECTION_ICONS = {
 
 
 def report_date(now=None):
-    return (now or datetime.now(KST)).strftime("%A, %B %d, %Y")
+    now = now or datetime.now(KST)
+    if now.tzinfo is not None:
+        now = now.astimezone(KST)
+    return now.strftime("%A, %B %d, %Y")
 
 
 def show_date(iso):
@@ -70,12 +79,26 @@ def _name_list(metrics, limit=6):
     return names + more
 
 
-def is_data_degraded(macro, sectors):
+def etf_session_lag(sectors, now=None):
+    """Weekdays the ETF section trails the session it should be reporting.
+
+    The calendar-day staleness tolerance cannot see this: one session late is
+    only two calendar days, well inside the window, so a source that is
+    consistently a day behind passes silently.
+    """
+    _, latest = as_of_range(all_metrics(sectors))
+    return sessions_behind(latest, now)
+
+
+def is_data_degraded(macro, sectors, now=None):
     """True when the report went out on data that should not be trusted as a
     normal reading: a core input missing, or anything past its staleness
     tolerance. main.py turns this into a non-zero exit."""
     everything = _all_metrics(macro, sectors)
     if any(m.status == "stale" for m in everything):
+        return True
+    lag = etf_session_lag(sectors, now)
+    if lag is not None and lag >= SESSION_LAG_DEGRADES_AT:
         return True
     for key in REQUIRED_MACRO_KEYS:
         metric = macro.get(key)
@@ -85,7 +108,7 @@ def is_data_degraded(macro, sectors):
     return bool(etfs) and not any(m.is_usable for m in etfs)
 
 
-def build_data_notes(macro, sectors):
+def build_data_notes(macro, sectors, now=None):
     """A short, honest footer: what is missing or stale, which tape served the
     ETF closes, and whether credit is from a different session than equities."""
     notes = []
@@ -101,6 +124,13 @@ def build_data_notes(macro, sectors):
     if stale:
         notes.append("{} series past their freshness window ({})".format(
             len(stale), _name_list(stale)))
+
+    lag = etf_session_lag(sectors, now)
+    if lag:
+        expected = show_date(last_expected_session(now).isoformat())
+        notes.append(
+            "ETF closes are {} session{} behind the expected {} close"
+            .format(lag, "" if lag == 1 else "s", expected))
 
     source_note = sectors.get("price_source_note")
     if source_note:
@@ -149,7 +179,7 @@ def format_dashboard(macro, sectors, now=None):
             blocks.append(_section(SECTION_ICONS.get(key, "\u2022"),
                                    GROUP_TITLES[key].upper(), group, baseline))
 
-    notes = build_data_notes(macro, sectors)
+    notes = build_data_notes(macro, sectors, now)
     if notes:
         blocks.append("\u26a0\ufe0f Data notes: " + "; ".join(notes) + ".")
 
