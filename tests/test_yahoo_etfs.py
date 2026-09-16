@@ -12,6 +12,13 @@ import dashboard
 import sectors
 
 
+@pytest.fixture(autouse=True)
+def _use_yahoo(monkeypatch):
+    """Alpaca is the default source again (freshness); these tests are about
+    the Yahoo path, which stays available via ETF_SOURCE=yahoo."""
+    monkeypatch.setattr(sectors, "ETF_SOURCE", "yahoo")
+
+
 def _patch_fetch(monkeypatch, frame, record=None):
     def fetch(symbols, period="3mo"):
         if record is not None:

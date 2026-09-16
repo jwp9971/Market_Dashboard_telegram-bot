@@ -8,7 +8,7 @@ Numbers, units, dates and quality now stay structured all the way to the
 presentation boundary; only render() turns them into text.
 """
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 # How to render the value itself.
@@ -34,6 +34,11 @@ MAX_AGE_FRED_OAS = 5       # ICE BofA OAS routinely lags one business day
 # Both FRED tolerances were raised from 4 after a live run on 2026-09-15 held
 # Friday's yields on a Tuesday -- 4 days, exactly at the old limit, so the
 # next Monday holiday would have produced a false alarm.
+
+# The US cash session closes 16:00 ET, which is 20:00 UTC on daylight time and
+# 21:00 on standard time. Using the later hour is the safe direction: we wait
+# an extra hour before expecting today's bar rather than crying stale early.
+US_SESSION_CLOSE_UTC_HOUR = 21
 
 UP = "▲"
 DOWN = "▼"
@@ -218,3 +223,52 @@ def mark_staleness(metrics, today: Optional[date] = None):
 
 def stale_metrics(metrics):
     return [m for m in metrics if m.status == "stale"]
+
+
+def last_expected_session(now=None):
+    """
+    The most recent weekday whose US cash close has certainly passed.
+
+    This is the session a morning-KST report should be reporting on. It is
+    weekday-based and knows nothing about market holidays -- see
+    sessions_behind() for how that limitation is contained.
+    """
+    now = now or datetime.now(timezone.utc)
+    # Accept any timezone (or a naive value, read as UTC) and normalise, so a
+    # caller passing a KST instant does not shift the session boundary.
+    now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+    day = now.date()
+    if now.hour < US_SESSION_CLOSE_UTC_HOUR:
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:          # Saturday, Sunday
+        day -= timedelta(days=1)
+    return day
+
+
+def sessions_behind(as_of, now=None):
+    """
+    How many weekdays an observation trails the expected session, or None if
+    the date is unusable.
+
+    Counted in weekdays rather than calendar days so a weekend does not read
+    as a lag. A single market holiday still shows as 1, which is why callers
+    should treat 1 as worth reporting and 2 or more as worth failing on: no
+    single holiday can produce a two-session gap.
+    """
+    if not as_of:
+        return None
+    try:
+        observed = datetime.strptime(as_of, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+    expected = last_expected_session(now)
+    if observed >= expected:
+        return 0
+
+    behind, day = 0, observed
+    while day < expected:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            behind += 1
+    return behind

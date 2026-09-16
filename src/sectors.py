@@ -26,13 +26,20 @@ except ImportError:  # pragma: no cover - exercised only without alpaca-py
 
 # Where ETF prices come from.
 #
-# "yahoo" (default) returns consolidated closes across every exchange for all
-# 22 symbols in a single request. "alpaca" keeps the previous path; on a free
-# plan it serves IEX only -- one exchange at a low single-digit share of
-# consolidated volume, whose daily close for a thinly traded fund can be built
-# from a handful of prints. A live run on 2026-09-15 showed AIHY unchanged to
-# the cent over both a day and a week on that feed, and Alpaca refused SIP.
-ETF_SOURCE = (os.getenv("ETF_SOURCE") or "yahoo").strip().lower()
+# "alpaca" (default) is the freshest: a live run on 2026-09-16 at 01:08 UTC --
+# five hours after the Sep 15 close -- got Sep 15 bars from Alpaca's path but
+# only Sep 14 from the batched Yahoo download, one full session behind on all
+# 22 rows. Freshness beats the one problem Yahoo solved, because a stale D/D
+# is wrong on every row while a frozen ticker is wrong on one.
+#
+# "yahoo" batches all 22 symbols into one request and returns consolidated,
+# split- and dividend-adjusted closes. It fixes thinly traded names -- AIHY
+# reported 0.00% over both a day and a week on Alpaca's IEX fallback, and real
+# moves on Yahoo -- but lags a session at the hour this report runs.
+#
+# Either way, sessions_behind() now reports the lag rather than leaving it to
+# be noticed by eye.
+ETF_SOURCE = (os.getenv("ETF_SOURCE") or "alpaca").strip().lower()
 
 ALPACA_API_KEY = (os.getenv("ALPACA_API_KEY") or "").strip() or None
 ALPACA_SECRET_KEY = (os.getenv("ALPACA_SECRET_KEY") or "").strip() or None
