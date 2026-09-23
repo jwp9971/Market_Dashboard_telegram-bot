@@ -9,6 +9,7 @@ suite touches the network, spends API credit, or sends a message.
 import os
 import sys
 import types
+from datetime import datetime as _real_datetime, timezone
 
 import pytest
 
@@ -89,6 +90,44 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(yfinance, "download", blocked, raising=False)
     monkeypatch.setattr(yfinance, "Ticker", blocked, raising=False)
     monkeypatch.setattr(requests, "get", blocked, raising=False)
+
+
+# The instant every test sees as "now", unless it passes its own now/today.
+# 2026-09-16 01:08 UTC is the real run that exposed the one-session ETF lag, so
+# the fixtures written around it stay coherent: last expected session Sep 15.
+FROZEN_NOW = _real_datetime(2026, 9, 16, 1, 0, tzinfo=timezone.utc)
+
+
+class _SameDatetime(type):
+    """Keeps isinstance(real_datetime_obj, <frozen class>) True, so code such
+    as metrics.to_iso_date behaves identically while the clock is frozen."""
+    def __instancecheck__(cls, obj):
+        return isinstance(obj, _real_datetime)
+
+
+class _FrozenDatetime(_real_datetime, metaclass=_SameDatetime):
+    @classmethod
+    def now(cls, tz=None):
+        if tz is None:
+            return FROZEN_NOW.replace(tzinfo=None)
+        return FROZEN_NOW.astimezone(tz)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    """
+    Hard guard: no test may depend on the real calendar.
+
+    Four tests passed on 2026-09-15 and failed a week later with no code
+    change: their fixture dates were fresh when written and aged past the
+    staleness window and the session-lag threshold as the real clock moved.
+    Freezing the clock where freshness is computed makes that impossible.
+    Tests that pass an explicit now=/today= still get exactly what they ask for.
+    """
+    import dashboard
+    import metrics
+    monkeypatch.setattr(metrics, "datetime", _FrozenDatetime)
+    monkeypatch.setattr(dashboard, "datetime", _FrozenDatetime)
 
 
 class FakeSeries:
