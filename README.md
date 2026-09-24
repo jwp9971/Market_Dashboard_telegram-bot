@@ -138,6 +138,19 @@ week's three best and three worst ETFs. A week is **degraded** when VIX, HY
 OAS or the 10Y is unusable, or every ETF is. Single gaps, values dated before
 Friday and the VIX fallback are footer notes only.
 
+Claude's weekly note has six sections: Regime Read, Market Read, Leadership,
+Trend View, What Doesn't Fit and Next Week Watch. It aims for about 700
+words and is flagged if it runs under 150 or over 1,000. The weekly note has
+its own model settings, separate from the daily ones:
+
+- `WEEKLY_ANTHROPIC_MODEL` (default `claude-sonnet-5`)
+- `WEEKLY_ANTHROPIC_EFFORT` (default `high`)
+
+Switching to a larger model is only a change to that setting. The note ends
+with a line naming the model that wrote it. If Claude declines, fails or is
+unavailable, a deterministic fallback note is sent with a ⚠️ warning
+explaining why.
+
 ### Install and run
 
 ```bash
@@ -250,6 +263,7 @@ src/
   weeks.py              Weekly: Mon-Fri week-end closes and 1W / 1M / 3M changes
   weekly_snapshot.py    Weekly: assembles every weekly number (local print only)
   weekly_dashboard.py   Weekly: snapshot text, movers, footer notes, degraded rule
+  weekly_analyst.py     Weekly: Claude prompt, quality gates, fallback note
 scripts/
   massive_probe.py      Manual live check of the Massive API (never run in Actions)
 tests/                  Network-free test suite

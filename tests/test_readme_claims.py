@@ -49,7 +49,8 @@ def test_removed_overclaims_stay_removed():
 def test_every_required_env_var_is_documented():
     for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "ANTHROPIC_API_KEY",
                 "FRED_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY",
-                "ANTHROPIC_MODEL", "ALPACA_FEED", "DRY_RUN", "MASSIVE_API_KEY"):
+                "ANTHROPIC_MODEL", "ALPACA_FEED", "DRY_RUN", "MASSIVE_API_KEY",
+                "WEEKLY_ANTHROPIC_MODEL", "WEEKLY_ANTHROPIC_EFFORT"):
         assert var in README, f"{var} is read by the code but undocumented"
 
 

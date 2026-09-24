@@ -96,8 +96,12 @@ def _sector_breadth(sector_snapshot, horizon: str = "D/D") -> Tuple[int, int]:
     return up, down
 
 
-def check_analysis_quality(text: Optional[str], truncated: bool = False) -> List[str]:
-    """Returns a list of problems with a model-written note. Empty == clean."""
+def check_analysis_quality(text: Optional[str], truncated: bool = False,
+                           sections=REQUIRED_SECTIONS, min_words: int = MIN_ANALYSIS_WORDS,
+                           max_words: int = MAX_ANALYSIS_WORDS,
+                           budget_words: int = 600) -> List[str]:
+    """Returns a list of problems with a model-written note. Empty == clean.
+    The defaults are the daily note's; the weekly note passes its own."""
     problems: List[str] = []
     if not text or not text.strip():
         return ["Analysis text was empty"]
@@ -106,15 +110,16 @@ def check_analysis_quality(text: Optional[str], truncated: bool = False) -> List
         problems.append("Model output was cut off by the token limit")
 
     word_count = len(text.split())
-    if word_count < MIN_ANALYSIS_WORDS:
+    if word_count < min_words:
         problems.append(f"Analysis is unusually short ({word_count} words)")
-    elif word_count > MAX_ANALYSIS_WORDS:
+    elif word_count > max_words:
         problems.append(
-            f"Analysis ran to {word_count} words against a 600-word budget"
+            f"Analysis ran to {word_count} words against a {budget_words}-word budget"
         )
 
-    lowered = text.lower()
-    missing = [s for s in REQUIRED_SECTIONS if s.lower() not in lowered]
+    # Models often write a curly apostrophe ("Doesn’t"); treat it as plain.
+    lowered = text.lower().replace("’", "'")
+    missing = [s for s in sections if s.lower() not in lowered]
     if missing:
         problems.append("Missing section(s): " + ", ".join(missing))
 
@@ -160,13 +165,23 @@ Sector data (all US-listed ETFs, daily closing bars):
 """
 
 
-def call_claude(prompt: str) -> Dict[str, Any]:
+def call_claude(prompt: str, system: Optional[str] = None, model: Optional[str] = None,
+                effort: Optional[str] = None, max_tokens: Optional[int] = None) -> Dict[str, Any]:
     """
     Returns {"text": str|None, "truncated": bool, "error": str|None}.
     The truncation flag is part of the return value rather than a printed
     warning so callers cannot accidentally present a cut-off note as
     a finished one.
+
+    Unset arguments fall back to the daily note's settings at call time. The
+    weekly note passes its own prompt, model and effort; the request shape
+    (adaptive thinking + effort, no prefill) is the same on Sonnet 5, Opus 5,
+    Opus 5.5 and Fable 5.1, so changing model is a settings change only.
     """
+    system = system or SYSTEM_PROMPT
+    model = model or ANTHROPIC_MODEL
+    effort = effort or ANTHROPIC_EFFORT
+    max_tokens = max_tokens or ANTHROPIC_MAX_TOKENS
     result: Dict[str, Any] = {"text": None, "truncated": False, "error": None}
 
     if not ANTHROPIC_API_KEY:
@@ -184,11 +199,11 @@ def call_claude(prompt: str) -> Dict[str, Any]:
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=ANTHROPIC_MAX_TOKENS,
+            model=model,
+            max_tokens=max_tokens,
             thinking={"type": "adaptive"},
-            output_config={"effort": ANTHROPIC_EFFORT},
-            system=SYSTEM_PROMPT,
+            output_config={"effort": effort},
+            system=system,
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -197,12 +212,23 @@ def call_claude(prompt: str) -> Dict[str, Any]:
         usage = getattr(response, "usage", None)
         if usage is not None:
             print(
-                "Claude usage: input={} output={} stop_reason={}".format(
+                "Claude usage: model={} input={} output={} stop_reason={}".format(
+                    model,
                     getattr(usage, "input_tokens", "?"),
                     getattr(usage, "output_tokens", "?"),
                     getattr(response, "stop_reason", "?"),
                 )
             )
+
+        # Larger models run safety classifiers that can decline with HTTP 200
+        # and stop_reason "refusal". Without this the note would silently
+        # become the fallback with no reason given.
+        if getattr(response, "stop_reason", None) == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) or "no category"
+            result["error"] = f"Claude declined ({category})"
+            print(f"WARNING: {result['error']}")
+            return result
 
         if getattr(response, "stop_reason", None) == "max_tokens":
             result["truncated"] = True

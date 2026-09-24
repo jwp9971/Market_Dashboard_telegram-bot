@@ -84,12 +84,13 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 **Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (created 2026-09-24 from `main`) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
 
-**Status:** Stages A–D are done.
+**Status:** Stages A–E are done.
 - `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. The values were cross-checked against Cboe and Yahoo on 2026-09-24.
 - `python src/weekly_dashboard.py` previews the real Telegram text locally: ~3,000 characters, one message.
+- `python src/weekly_analyst.py` writes Claude's note locally, costing one Claude call. The live test on 2026-09-24 used Sonnet 5: 3.6k input and 3.4k output tokens (≈ $0.04), 683 words, `end_turn`, and every number checked matched the snapshot.
 - `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets. No workflow uses the secret until Stage F.
 
-Next: Stage E.
+Next: Stage F.
 
 ### Massive data terms — hard rules
 
@@ -186,7 +187,7 @@ Each stage gets an overview and a user decision before any code.
 | B ✅ | Massive client foundation: per-class limiter (injectable clock), retry/backoff, raw cache, budget guard, probe script, fake-clock tests, live probe |
 | C ✅ | `weeks.py`, `massive.py`, `cboe.py`, `weekly_snapshot.py`; `macro.get_fred_observations` / `get_yfinance_closes` (the daily `get_fred_series` now wraps the first, same output); `Metric.quarter_change` + `horizons` |
 | D ✅ | `weekly_dashboard.py`: two-line rows (`Metric.render_block`), a movers block, footer notes, `is_weekly_degraded` |
-| E | Weekly prompt and fallback rewritten for the weekly framing |
+| E ✅ | `weekly_analyst.py`: weekly prompt (6 sections, ~700 words), gates 150–1,000, deterministic fallback, own model settings, Markdown stripped; `analyst.call_claude` / `check_analysis_quality` take per-call settings and report refusals |
 | F | Integration: weekly workflow file, `DRY_RUN`, real chat, manual dispatch, tuning |
 | G | User decides: replace the daily bot / run both / abandon → merge to `main` or not |
 
@@ -204,10 +205,21 @@ Each stage gets an overview and a user decision before any code.
   - The derived notes live in `weekly_dashboard.weekly_data_notes`; `weekly_snapshot.source_notes` supplies only the source facts.
 - **Degraded** (`is_weekly_degraded`) when VIX, HY OAS or 10Y is unusable, or every ETF is. Everything else is a note only.
 
-### Open questions for Stages E/F
+### Stage E decisions (2026-09-24)
 
-1. Stage E: the weekly prompt's required sections and word limits, and the fallback note.
-2. Stage F schedule: yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run would get Friday's.
+- **Sections:** Regime Read, Market Read, Leadership, Trend View, What Doesn't Fit, Next Week Watch. About 700 words; gates at 150 / 1,000. The check accepts a curly apostrophe (Doesn’t).
+- **Model:** `WEEKLY_ANTHROPIC_MODEL` (default `claude-sonnet-5`) and `WEEKLY_ANTHROPIC_EFFORT` (default `high`), separate from the daily settings.
+  - The user plans to move to a larger model later. The request shape (adaptive thinking + `output_config.effort`, `max_tokens` 16000, no prefill) is valid on Sonnet 5, Opus 5, Opus 5.5 and Fable 5.1, so that's an env change only.
+  - When they switch to Opus 5 / Fable 5.1, **offer Anthropic's server-side refusal `fallbacks`** (beta; see the claude-api skill). They weren't enabled for Sonnet 5.
+  - A refusal currently becomes the deterministic fallback with the warning "Claude declined (<category>)".
+- The note is **signed** `— <model> · effort <effort>`.
+- **Markdown handling:** the live run returned Markdown headings, so the prompt now asks for plain text and `weekly_analyst.plain_text()` strips `#` headings and `**` / `__` markers before sending.
+  - The fixed prompt has **not yet been seen live**; check it in Stage F's `DRY_RUN`.
+- The prompt gets breadth ("X of N up over 1W / 1M / 3M") computed in code, the movers and the footer notes. The HYG price-only caveat is spelled out.
+
+### Open questions for Stage F
+
+1. Stage F schedule: yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run would get Friday's.
 
 ## Git workflow
 
