@@ -93,7 +93,7 @@ def test_the_log_carries_statuses_not_values(run, capsys):
     weekly_main.run_weekly_report(now=NOW)
     out = capsys.readouterr().out
     assert "Weekly report sent to Telegram: True" in out
-    assert "$102.00" not in out and "14.81" not in out
+    assert "$102.00" not in out and "18.00" not in out
 
 
 # --- the workflow file ------------------------------------------------------------
@@ -103,11 +103,30 @@ def _workflow_lines():
     return [line.split("#", 1)[0] for line in WORKFLOW.read_text(encoding="utf-8").splitlines()]
 
 
-def test_the_workflow_is_manual_only():
+def test_an_unexpected_crash_prints_only_its_type(run, monkeypatch, capsys):
+    """An exception message can quote a number; the Actions log must not."""
+    def explode(snapshot, now=None):
+        raise ValueError("could not convert string to float: '761.69'")
+    monkeypatch.setattr(weekly_dashboard, "format_weekly_dashboard", explode)
+    assert weekly_main.main() == EXIT_FAILED
+    out = capsys.readouterr().out
+    assert "Weekly report crashed: ValueError" in out
+    assert "761.69" not in out and run["sent"] == []
+
+
+def test_the_workflow_runs_saturday_noon_kst_or_by_hand():
     text = "\n".join(_workflow_lines())
     assert "workflow_dispatch" in text
-    assert "schedule:" not in text and "cron" not in text
+    assert text.count("cron:") == 1 and "cron: '0 3 * * 6'" in text
     assert "push:" not in text and "pull_request" not in text
+
+
+def test_the_daily_workflow_is_manual_only_now():
+    daily = ROOT / ".github" / "workflows" / "daily-dashboard.yml"
+    lines = [line.split("#", 1)[0] for line in daily.read_text(encoding="utf-8").splitlines()]
+    text = "\n".join(lines)
+    assert "workflow_dispatch" in text
+    assert "schedule:" not in text and "cron" not in text
 
 
 def test_the_workflow_never_publishes_data():

@@ -125,10 +125,10 @@ def test_no_note_falls_back_with_the_reason(snap, claude):
 # --- fallback --------------------------------------------------------------------
 
 def test_fallback_calls_risk_on_only_when_vix_and_credit_agree(snap):
-    snap["macro"]["HY OAS"].week_change = -0.05          # VIX already fell 6.50%
+    snap["macro"]["HY OAS"].week_change = -0.05          # VIX already fell 10.00%
     text = generate_weekly_fallback(snap)
     assert "Regime Read: Risk appetite improved over the week" in text
-    assert "VIX fell 6.50%" in text and "HY OAS tightened 0.05pts" in text
+    assert "VIX fell 10.00%" in text and "HY OAS tightened 0.05pts" in text
 
 
 def test_fallback_calls_risk_off_when_both_rise(snap):

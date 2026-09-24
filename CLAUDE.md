@@ -38,9 +38,9 @@ python scripts/massive_probe.py       # weekly branch: live Massive check (~8 fr
 
 `requirements-direct.txt` records the packages actually imported; `requirements.txt` is the full lock.
 
-## Architecture (current daily bot, on `main`)
+## Architecture (daily bot)
 
-Scheduled by `.github/workflows/daily-dashboard.yml` at `0 23 * * 0-4` UTC = **08:00 KST Mon–Fri**. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
+**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, `0 3 * * 6` UTC = Saturday 12:00 KST; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` keeps its Run button, and its old cron `0 23 * * 0-4` is noted in a comment there. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
 
 Data flow:
 
@@ -84,7 +84,7 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 **Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (created 2026-09-24 from `main`) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
 
-**Status:** Stages A–F are done.
+**Status:** Stages A–G are done on the branch. The weekly report replaces the daily bot once `weekly-commentary` is merged to `main` (by the user, after making the repo private).
 - `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. The values were cross-checked against Cboe and Yahoo on 2026-09-24.
 - `python src/weekly_dashboard.py` previews the real Telegram text locally: ~3,000 characters, one message.
 - `python src/weekly_analyst.py` writes Claude's note locally, costing one Claude call. The live test on 2026-09-24 used Sonnet 5: 3.6k input and 3.4k output tokens (≈ $0.04), 683 words, `end_turn`, and every number checked matched the snapshot.
@@ -93,7 +93,7 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
   - The **first real send reached the user's Telegram chat**: exit 0, `claude-sonnet-5`, 3.7k input and 3.7k output tokens.
 - `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets. No GitHub run has used it yet, because the workflow can't run until it's on `main`.
 
-Next: Stage G (the user decides).
+Next: the first GitHub run after the merge (see Stage G decisions). After that, new data and content ideas from the user.
 
 ### Massive data terms — hard rules
 
@@ -101,7 +101,17 @@ Massive's market-data terms limit use to **personal, non-commercial** use. They 
 
 - **Never commit Massive data.** Test fixtures in `tests/fixtures/massive/` are **synthetic**: the documented shape with made-up numbers. Real responses live only in the gitignored `cache/`.
 - **Never print Massive values in Actions.** Log only the endpoint, status, counts and dates. No `DRY_RUN` in Actions. Don't put Massive data in artifacts or the Actions cache: the weekly job fetches fresh on each run (Stage F).
-- The Telegram chat is the user alone, which counts as personal use. Sending Massive-based numbers to Claude for the note is a low-risk grey area (processing, not publishing).
+- The Telegram chat is the user alone, which counts as personal use.
+
+**Terms review (2026-09-24, from the full terms page) — the user accepted the residual risk and chose not to email Massive for now:**
+- **Fine:**
+  - Code in the repo isn't Market Data. A search of every file and the full git history found no real Massive values.
+  - Running on GitHub's runners is not "transmitting … for publication or distribution" (§2).
+  - The user is the only end user (§1).
+- **Open ambiguity 1:** sending Massive numbers to Claude. §5(c) forbids transferring the data or "analytics, research … derived from" it to any third party. §5(d) forbids "non-display use" unless licensed, and §2 says "strictly for display use only". This applies wherever the bot runs, laptop included.
+- **Open ambiguity 2:** CME "Non-Professional" status (§4.3). CME's definition includes "has an active futures trading account". This affects the WTI / gold / copper data.
+- **If Massive ever objects:** the fix is to keep Massive values out of the Claude prompt, or drop Massive futures. Deleting all Market Data on termination (§8) means clearing the local `cache/`.
+- **Other sources:** FRED (ICE BofA OAS), Yahoo and Cboe have similar personal-use terms; the same no-values-in-logs rule covers them.
 - **Don't compute DXY (or any index) from Massive FX pairs.** The terms treat that as a derived index.
 
 ### Massive Basic tier — confirmed (docs + live probe, 2026-09-24)
@@ -196,7 +206,7 @@ Each stage gets an overview and a user decision before any code.
 | D ✅ | `weekly_dashboard.py`: two-line rows (`Metric.render_block`), a movers block, footer notes, `is_weekly_degraded` |
 | E ✅ | `weekly_analyst.py`: weekly prompt (6 sections, ~700 words), gates 150–1,000, deterministic fallback, own model settings, Markdown stripped; `analyst.call_claude` / `check_analysis_quality` take per-call settings and report refusals |
 | F ✅ | `weekly_main.py` (fetch, format, analyse, send, exit code; reuses `send_analysis_report` / `decide_exit_code`; refuses `DRY_RUN` inside Actions); inert manual workflow; local dry run + first real send |
-| G | User decides: replace the daily bot / run both / abandon → merge to `main` or not |
+| G ✅ | Weekly replaces daily: weekly cron `0 3 * * 6`, daily manual only; the repo goes private; terms review recorded; crash-safe logging; then `weekly-commentary` → `main` by PR |
 
 ### Stage D decisions (2026-09-24)
 
@@ -224,13 +234,17 @@ Each stage gets an overview and a user decision before any code.
   - The fixed prompt has **not yet been seen live**; check it in Stage F's `DRY_RUN`.
 - The prompt gets breadth ("X of N up over 1W / 1M / 3M") computed in code, the movers and the footer notes. The HYG price-only caveat is spelled out.
 
-### Open questions for Stage G
+### Stage G decisions (2026-09-24)
 
-1. **Outcome:** replace the daily bot, run both, or abandon. Any merge to `main` goes through a PR.
-2. **Workflow on `main`:** needed for both the Run button and any schedule. GitHub runs schedules only from the default branch.
-3. **Schedule timing:** yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run (e.g. Sunday or Monday KST) would get Friday's. VIX from Cboe can lag too, but it falls back to Yahoo.
-4. **First GitHub run:** confirm the `MASSIVE_API_KEY` secret works (a 403 would show as `MassiveAuthError` and a degraded report), and that Yahoo answers from GitHub's runners.
-5. **Model:** the user may move `WEEKLY_ANTHROPIC_MODEL` to a larger model. Offer server-side refusal `fallbacks` then.
+- **Weekly replaces daily.**
+  - `weekly-commentary.yml` runs on `cron: '0 3 * * 6'` = **Saturday 12:00 KST** and keeps its Run button.
+  - `daily-dashboard.yml` lost only its `schedule:`. It is manual-only now, and a comment there shows the old cron for restoring it. Tests enforce both (`test_weekly_main.py`, `test_readme_claims.py`).
+- **Why that hour:** it is six hours after Friday's close. Cboe updated its VIX file at 01:51 GMT the day after a session, and Massive had the previous session by 05:00 UTC. Rates and credit still show Thursday; the footer says so. GitHub may start runs 1–2 h late.
+- **The repository goes private** (the user does this in Settings, *before* the merge to `main`), so Actions logs are no longer public. The no-values-in-logs rules still apply.
+- **`weekly_main.main()` catches any unexpected exception and prints only its type.** An exception message or traceback can quote a value.
+- The test fixtures' real Cboe VIX numbers were replaced with invented ones.
+- **Remaining after merge:** the first GitHub run (Run workflow on `main`). Check for `MassiveAuthError` (a wrong secret), that Yahoo (DXY, and VIX fallback) answers from GitHub's runners, and the "delivered (OK)" summary.
+- **Model:** the user may later set the repository variable `WEEKLY_ANTHROPIC_MODEL` to a larger model. Offer the server-side refusal `fallbacks` then.
 
 ## Git workflow
 

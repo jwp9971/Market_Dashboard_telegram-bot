@@ -1,13 +1,17 @@
 name: Weekly Commentary
 
-# Manual only. GitHub shows the "Run workflow" button only once this file also
-# exists on the default branch, so it stays inert until that is decided
-# (Stage G). No schedule until the user chooses one.
+# Saturday 03:00 UTC = 12:00 KST, six hours after Friday's close: Cboe had
+# updated its VIX file by 01:51 GMT the day after a session, and Massive had
+# the previous session by 05:00 UTC. Rates and credit still show Thursday
+# (FRED / Economy API run a business day late). GitHub may start it 1-2 h late.
+# The Run button (workflow_dispatch) works from the default branch.
 #
 # Massive's terms forbid publishing its data and this repository's logs are
 # public: no DRY_RUN here, no artifacts, no actions/cache. The job fetches
 # fresh each run and logs only statuses and counts.
 on:
+  schedule:
+    - cron: '0 3 * * 6'
   workflow_dispatch: {}
 
 permissions:
