@@ -84,7 +84,7 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 **Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (created 2026-09-24 from `main`) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
 
-**Status:** Stages A and B are done: branch, `src/massive_client.py`, `scripts/massive_probe.py`, and the live probe (2026-09-24). `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets; the secret isn't used by any workflow until Stage F. Next: Stage C.
+**Status:** Stages A–C are done. `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. Its values were cross-checked against Cboe and Yahoo on 2026-09-24. `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets; the secret isn't used by any workflow until Stage F. Next: Stage D.
 
 ### Massive data terms — hard rules
 
@@ -106,11 +106,14 @@ Massive's market-data terms limit use to **personal, non-commercial** use. They 
 - **Treasury yields** `/fed/v1/treasury-yields` (`date.gte`, `sort=date.desc`, `limit`):
   - Fields actually returned: `date, yield_1_month, yield_3_month, yield_1_year, yield_2_year, yield_5_year, yield_10_year, yield_30_year`. The docs also list 6M/3Y/7Y/20Y, but those were absent.
   - Latest row is **one business day behind** (09-22 on 2026-09-24 KST), the same lag as FRED.
-- **Futures** (`/futures/v1/contracts`, `/futures/v1/aggs/{contract}?resolution=1session`) — **the docs were wrong in places, so Stage C must solve these first:**
-  - There is **no continuous or front-month ticker**, and there is **no `days_to_maturity` field**. Contracts carry `ticker, type, active, first_trade_date, last_trade_date, settlement_date, product_code, …`.
-  - The list mixes `type: "combo"` (spreads such as `CL:BF F7-G7-H7`) with `type: "single"`. The first 50 CL rows were all combos, and the list has more pages. So filter to singles and pick the nearest `last_trade_date`, preferably with server-side filters rather than paging.
-  - **`product_code=GC` returned 0 contracts.** Find the right gold code via `/futures/v1/products`, or check whether gold is included on Basic.
-  - Bars come **newest first**. Each bar has `window_start` (the previous calendar day) and `session_end_date` (the real session). **Use `session_end_date`.** A back-month contract (HGF7) was missing a day, which is another reason to use the true front month.
+- **Futures** (`/futures/v1/contracts`, `/futures/v1/aggs/{contract}?resolution=1session`). The docs were wrong in places. Solved in Stage C (`massive.get_futures_series`):
+  - Codes: **CL** (NYMEX `XNYM`), **GC** and **HG** (COMEX `XCEC`). There is no continuous ticker, and no `days_to_maturity` field.
+  - **Without `date=`, contracts come back once per contract per day back to 2025**, so a page covers almost nothing. `sort` accepts only `date`, `product_code` and `ticker`. The `type` label is unreliable: spreads like `CL:BF F7-G7-H7` are labelled `"single"`.
+  - The working query: build the next 8 monthly tickers (`GCV6, GCX6, …`) and request them with `ticker.any_of`, plus `date=<week's Friday>`. If that returns empty, retry the day before: the current day's snapshot can be empty, as it was for gold on 09-24.
+  - Keep only outrights (regex `^CODE[FGHJKMNQUVXZ]\d{1,2}$`) and skip contracts within 14 days of `last_trade_date`. The expiring month otherwise pushes December gold out of the top 3. Then take the **most traded (last 5 sessions) of the next 3**.
+  - On 2026-09-24 this picked CLX6, GCZ6 and HGZ6, the benchmark months.
+  - Bars come **newest first**. `window_start` is the previous calendar day, so **date by `session_end_date`**. A bar with `settlement_price: null` is a session still trading and must be dropped. Values use `settlement_price`.
+- **The rate limit is counted server-side across processes.** Two probe runs less than a minute apart got a 429. The client's retry handled it.
 - **DXY is not on Massive.** A reference search for "DXY" found only unrelated stocks.
 - **Not available on Basic:** SPX, DJI, RUT and **VIX** index values; HY/IG credit spreads; financial statements.
 - The `vX` endpoints are less stable than `v1`–`v3`.
@@ -123,10 +126,10 @@ Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, fundi
 |---|---|---|
 | 22 ETFs | Massive Stocks grouped daily — replaces Alpaca; fixes the IEX thin-ETF problem | ✅ all 22 present; price-only (not dividend-adjusted) |
 | 10Y / 2Y (→ 2s10s) | Massive Economy `/fed/v1/treasury-yields` | ✅ works; one business day behind, like FRED |
-| WTI / gold / copper | Massive Futures | ⚠️ front-month selection must be built; gold code not found (see above) |
-| DXY | **not on Massive** — user decides in Stage C; recommendation: keep Yahoo `DX-Y.NYB`. Computing it from Massive FX pairs is ruled out by the terms | — |
+| WTI / gold / copper | Massive Futures: settlement of the most-traded nearby contract; all horizons from that one contract (no roll jumps) | ✅ |
+| DXY | **Yahoo `DX-Y.NYB`** (decided 2026-09-24; not on Massive, and computing it from Massive FX is ruled out by the terms) | ✅ |
 | HY / IG OAS | **FRED, unchanged** (Massive gap; one-day lag known and disclosed) | IG kept by assumption — user may drop it |
-| VIX | **CBOE public CSV** `https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv` — no key, `DATE,OPEN,HIGH,LOW,CLOSE` (MM/DD/YYYY), history from 1990 | on 2026-09-24 KST the last row was 09/22 — measure its lag in Stage C |
+| VIX | **Cboe public CSV** `https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv` (no key; `DATE,OPEN,HIGH,LOW,CLOSE`, MM/DD/YYYY; from 1990). **Falls back to Yahoo `^VIX`** when Cboe lacks the week's last session | At 05:00 UTC on 2026-09-24 it still ended at 09-22 (updated 01:51 GMT 09-23), so it runs **more than a session behind** |
 | USD/KRW | **dropped** from the weekly report (daily bot unchanged) | — |
 
 ### Design decisions already agreed
@@ -143,7 +146,10 @@ Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, fundi
   - 1W = this week's last close vs the previous week's last close.
   - 1M = vs 4 weeks earlier; 3M = vs 13 weeks earlier.
   - "Last close" = the week's final trading day — usually Friday, Thursday if Friday is a holiday. Take the last available bar inside the Mon–Fri window rather than using a holiday calendar.
-  - Not "the last 5 observations". Put the definition in one helper so every collector uses the same week boundaries.
+  - Not "the last 5 observations". **Built in `src/weeks.py`**: every collector hands in a dated daily series and `weekly_metric()` makes the `Metric`. Weekly metrics carry `horizons=WEEKLY_HORIZONS` (1W/1M/3M, with 3M in the new `quarter_change`); daily ones keep the default and render byte-identically.
+  - **The report always covers the last completed week** (Friday's 21:00 UTC close has passed), even when it runs midweek.
+  - No observation inside the target week means the value is **missing** ("no data in the week of …"), never last week's number.
+  - A 1M/3M with no prior close is simply left out. AIHY (listed 07-21) and NCLD (listed 08-06) have no 3M yet.
 - The weekly job gets its **own workflow file, `workflow_dispatch` only** — deferred to **Stage F** (nothing to run before then). GitHub shows the "Run workflow" button only when the workflow file also exists on the default branch (`main`), so at Stage F the user chooses: add an inert button-only file to `main` via PR, or another trigger. Don't modify `daily-dashboard.yml` on the branch.
 - **Telegram: the real chat**, no test chat (the daily bot is inactive, so no clash). `DRY_RUN=1` is the safety switch while developing. So `telegram_bot.py` needs no chat-override change.
 
@@ -173,19 +179,17 @@ Each stage gets an overview and a user decision before any code.
 |---|---|
 | A ✅ | Local `venv` (Python 3.14); `weekly-commentary` from `main`; `cache/` gitignored; decisions recorded; user confirms `MASSIVE_API_KEY` in GitHub Secrets |
 | B ✅ | Massive client foundation: per-class limiter (injectable clock), retry/backoff, raw cache, budget guard, probe script, fake-clock tests, live probe |
-| C | Collectors → `Metric`: Massive (ETFs, yields, futures), FRED (OAS), CBOE (VIX), DXY per user decision; Mon–Fri week helper + 3M horizon; futures front-month selection and gold code |
+| C ✅ | `weeks.py`, `massive.py`, `cboe.py`, `weekly_snapshot.py`; `macro.get_fred_observations` / `get_yfinance_closes` (the daily `get_fred_series` now wraps the first, same output); `Metric.quarter_change` + `horizons` |
 | D | Weekly snapshot + dashboard sections, footer notes for supplementary sources, delivery layout |
 | E | Weekly prompt and fallback rewritten for the weekly framing |
 | F | Integration: weekly workflow file, `DRY_RUN`, real chat, manual dispatch, tuning |
 | G | User decides: replace the daily bot / run both / abandon → merge to `main` or not |
 
-### Open questions for Stage C
+### Open questions for Stage D
 
-1. Futures: how to list only `single` contracts near expiry (server-side filters on `/futures/v1/contracts`), and the correct gold product code (or whether gold is on Basic).
-2. Futures roll: a 13-week (3M) change spans a contract roll. Choose between chaining front months and using one contract for the whole window.
-3. DXY source: Yahoo (recommended) or something else.
-4. VIX from CBOE: measure how far behind the file runs.
-5. Delivery shape (same two Telegram messages or a new weekly layout): decided in Stage D.
+1. Delivery shape: the same two Telegram messages, or a new weekly layout.
+2. Which snapshot notes (price-only ETFs, contracts used, values dated before Friday, VIX fallback, missing rows) go in the footer, and which conditions count as **degraded**.
+3. Stage F schedule: yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run would get Friday's.
 
 ## Git workflow
 

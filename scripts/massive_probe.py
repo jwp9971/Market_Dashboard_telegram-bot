@@ -5,15 +5,16 @@ The only script that calls Massive live. Run it by hand, never in Actions.
 
 It checks what the docs leave open -- ETF coverage in grouped daily, what a
 weekend date returns, treasury-yield fields and lag, futures contract codes
-and bar dating, whether DXY exists -- and saves every raw answer under the
+and which contract is most traded -- and saves every raw answer under the
 gitignored cache/massive/ for inspection. It prints structure (counts, field
 names, dates, ticker symbols), never prices or yields: Massive's terms forbid
 publishing its data and this repo is public.
 
-About 10 calls; the sixth futures call waits for the rate limit, so it takes
-a little over a minute.
+Up to about 15 futures calls, so the rate limiter makes it take roughly three
+minutes. Answers already cached today are reused for free.
 """
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -76,65 +77,93 @@ def probe_economy(client, today):
             print(f"{name}: filled on {filled}/{len(results)} rows")
 
 
-def _front_month(contracts):
-    """Nearest-expiry contract by days_to_maturity, if the field exists."""
-    dated = [c for c in contracts if isinstance(c.get("days_to_maturity"), (int, float))
-             and c["days_to_maturity"] >= 0]
-    return min(dated, key=lambda c: c["days_to_maturity"]) if dated else None
+def probe_products(client):
+    """Futures product codes on COMEX (XCEC) and NYMEX (XNYM): names and codes only."""
+    for venue in ("XCEC", "XNYM"):
+        section(f"Futures products on {venue}")
+        body = client.get("/futures/v1/products",
+                          {"trading_venue": venue, "limit": 1000}, "futures", cache=True)
+        results = body.get("results") or []
+        print(f"products: {len(results)}")
+        for row in results:
+            name = str(row.get("name") or "")
+            if any(word in name.lower() for word in ("gold", "copper", "crude", "wti")):
+                print(f"  {row.get('product_code'):<6} type={row.get('type')}  {name}")
 
 
-def probe_futures(client, today):
-    since = (today - timedelta(days=10)).isoformat()
+def _recent_volume(rows, sessions=5):
+    """Volume over the latest few sessions; bars arrive newest first."""
+    ordered = sorted(rows, key=lambda r: str(r.get("session_end_date")), reverse=True)
+    return sum(r.get("volume") or 0 for r in ordered[:sessions])
+
+
+# A plain outright contract: product code, month letter, year digit(s), e.g.
+# GCZ6. Spreads and combos (CL:BF F7-G7-H7, HG:SA 03M F7) are labelled
+# type="single" too, so the ticker shape is the reliable test.
+MONTH_CODES = "FGHJKMNQUVXZ"
+
+
+def is_outright(ticker, code):
+    return bool(re.fullmatch(rf"{code}[{MONTH_CODES}]\d{{1,2}}", str(ticker)))
+
+
+def candidate_tickers(code, today, months=8):
+    """This month's contract and the next few: GCV6, GCX6, GCZ6, GCF7, ..."""
+    tickers = []
+    year, month = today.year, today.month
+    for _ in range(months):
+        tickers.append(f"{code}{MONTH_CODES[month - 1]}{year % 10}")
+        month += 1
+        if month > 12:
+            year, month = year + 1, 1
+    return tickers
+
+
+def probe_futures(client, today, session):
+    since = (today - timedelta(weeks=14)).isoformat()
     for code, name in FUTURES_PRODUCTS.items():
-        section(f"Futures: {name} ({code})")
+        section(f"Futures: {name} ({code}) -- next 3 single contracts")
         try:
-            body = client.get("/futures/v1/contracts",
-                              {"product_code": code, "date": today.isoformat(), "limit": 50},
-                              "futures", cache=True)
+            # The endpoint only sorts by date/product_code/ticker, so fetch the
+            # contracts expiring in the next ~7 months and order them here.
+            body = client.get("/futures/v1/contracts", {
+                # Without date= the endpoint returns one row per contract per
+                # day back to 2025; one day's snapshot lists each contract once.
+                # Paging through every listed spread is wasteful, so ask for
+                # the outright tickers we can name ourselves.
+                "ticker.any_of": ",".join(candidate_tickers(code, today)),
+                "date": session, "limit": 100,
+            }, "futures", cache=True)
         except MassiveError as exc:
             print(f"contracts lookup raised {type(exc).__name__}: {exc}")
             continue
-        contracts = body.get("results") or []
-        print(f"contracts listed: {len(contracts)}")
-        if not contracts:
-            print(f"top-level keys: {fields(body)}")
-            continue
-        print(f"contract fields: {fields(contracts[0])}")
-        front = _front_month(contracts)
-        if front is None:
-            print("no days_to_maturity field -- cannot pick a front month automatically")
-            continue
-        ticker = front.get("ticker")
-        print(f"front month: {ticker} ({front.get('days_to_maturity')} days to maturity; "
-              f"listed at position {contracts.index(front) + 1})")
-        if not ticker:
-            continue
-        try:
-            bars = client.get(f"/futures/v1/aggs/{ticker}",
-                              {"resolution": "1session", "window_start.gte": since, "limit": 20},
-                              "futures", cache=True)
-        except MassiveError as exc:
-            print(f"bars raised {type(exc).__name__}: {exc}")
-            continue
-        rows = bars.get("results") or []
-        print(f"session bars: {len(rows)}")
-        if rows:
-            print(f"bar fields: {fields(rows[0])}")
-            for row in rows[-3:]:
-                start = row.get("window_start")
-                start_text = (datetime.fromtimestamp(start / 1e9, timezone.utc).date().isoformat()
-                              if isinstance(start, (int, float)) else start)
-                print(f"  window_start={start_text}  session_end_date={row.get('session_end_date')}")
-
-
-def probe_dxy(client):
-    section("Reference: does DXY exist?")
-    body = client.get("/v3/reference/tickers", {"search": "DXY", "limit": 20},
-                      "reference", cache=False)
-    results = body.get("results") or []
-    print(f"matches: {len(results)}")
-    for row in results:
-        print(f"  {row.get('ticker')}  market={row.get('market')}  name={row.get('name')}")
+        listed = body.get("results") or []
+        outrights = [c for c in listed if is_outright(c.get("ticker"), code)
+                     # In its last two weeks a contract's volume has already
+                     # moved to the next one, so it is never a candidate.
+                     and str(c.get("last_trade_date")) >= (today + timedelta(days=14)).isoformat()]
+        contracts = sorted(outrights, key=lambda c: str(c.get("last_trade_date")))[:3]
+        print(f"contracts returned: {len(listed)}, outrights: {len(outrights)}; nearest three: "
+              + ", ".join(str(c.get("ticker")) for c in contracts))
+        candidates = []
+        for contract in contracts:
+            ticker = contract.get("ticker")
+            try:
+                bars = client.get(f"/futures/v1/aggs/{ticker}", {
+                    "resolution": "1session", "window_start.gte": since, "limit": 200,
+                }, "futures", cache=True)
+            except MassiveError as exc:
+                print(f"  {ticker}: bars raised {type(exc).__name__}: {exc}")
+                continue
+            rows = bars.get("results") or []
+            dates = sorted(str(r.get("session_end_date")) for r in rows)
+            settled = sum(1 for r in rows if r.get("settlement_price") is not None)
+            print(f"  {ticker:<6} last_trade={contract.get('last_trade_date')}  bars={len(rows)}  "
+                  f"with settlement={settled}  "
+                  f"span={dates[0] if dates else '-'}..{dates[-1] if dates else '-'}")
+            candidates.append((_recent_volume(rows), ticker))
+        if candidates:
+            print(f"  most traded over the last 5 sessions: {max(candidates)[1]}")
 
 
 def main():
@@ -142,13 +171,12 @@ def main():
     today = now.date()
     session = last_expected_session(now)
     saturday = session - timedelta(days=(session.weekday() - 5) % 7 or 7)
-    client = MassiveClient(max_calls=15)
+    client = MassiveClient(max_calls=30)
 
     steps = (
         lambda: probe_stocks(client, session.isoformat(), saturday.isoformat()),
         lambda: probe_economy(client, today),
-        lambda: probe_futures(client, today),
-        lambda: probe_dxy(client),
+        lambda: probe_futures(client, today, session.isoformat()),
     )
     for step in steps:
         try:

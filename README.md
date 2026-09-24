@@ -126,6 +126,12 @@ The daily report doesn't use it. Massive's terms forbid publishing their data,
 so real responses are cached only in the gitignored `cache/` folder. The test
 fixtures are synthetic.
 
+The weekly numbers cover the last completed Monday-Friday week, measured on
+week-end closes. 1W compares with the previous week's close, 1M with four
+weeks back and 3M with thirteen. ETF changes are price-only (Massive does not
+adjust for dividends). Futures use the official settlement of the most-traded
+nearby contract.
+
 ### Install and run
 
 ```bash
@@ -233,6 +239,10 @@ src/
   dashboard.py          Renders the snapshot
   telegram_bot.py       Delivery and message splitting
   massive_client.py     Massive API access: rate limit, retries, cache, call budget (weekly)
+  massive.py            Weekly: ETFs, Treasury yields, futures from Massive
+  cboe.py               Weekly: VIX from Cboe's public history file
+  weeks.py              Weekly: Mon-Fri week-end closes and 1W / 1M / 3M changes
+  weekly_snapshot.py    Weekly: assembles every weekly number (local print only)
 scripts/
   massive_probe.py      Manual live check of the Massive API (never run in Actions)
 tests/                  Network-free test suite

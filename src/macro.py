@@ -102,15 +102,31 @@ def get_yfinance_series(ticker):
         return None, None, None, None, None
 
 
-def get_fred_series(series_id, limit=40):
+def get_yfinance_closes(ticker, period="6mo"):
     """
-    Returns (current, day_delta, week_delta, month_delta, as_of) as level
-    changes in percentage points, since FRED rate/spread series are already
-    expressed in %. One API call per series.
+    Dated daily closes [('YYYY-MM-DD', close), ...], oldest first, or [] on
+    failure. The weekly commentary needs the dates themselves to find each
+    week's last close, not just offsets from the latest bar.
+    """
+    try:
+        history = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=False)
+        closes = history["Close"].dropna()
+        return [(to_iso_date(day), _coerce_numeric(value))
+                for day, value in zip(closes.index, closes)
+                if _coerce_numeric(value) is not None]
+    except Exception as e:
+        print(f"Error fetching {ticker}: {type(e).__name__}")
+        return []
+
+
+def get_fred_observations(series_id, limit=40):
+    """
+    Dated observations [('YYYY-MM-DD', value), ...], newest first, or [] if
+    the key is missing or the request fails. One API call per series.
     """
     if not FRED_API_KEY:
         print("FRED_API_KEY is not set; skipping FRED series fetch for", series_id)
-        return None, None, None, None, None
+        return []
 
     try:
         url = "https://api.stlouisfed.org/fred/series/observations"
@@ -124,33 +140,40 @@ def get_fred_series(series_id, limit=40):
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
         observations = response.json().get("observations", [])
-
-        values, dates = [], []
+        rows = []
         for obs in observations:
             value = _coerce_numeric(obs.get("value"))
             if value is not None:
-                values.append(value)
-                dates.append(obs.get("date"))
-
-        if not values:
-            return None, None, None, None, None
-
-        return (
-            values[0],
-            _level_change(values, 1),
-            _level_change(values, 5),
-            _level_change(values, 21),
-            to_iso_date(dates[0]),
-        )
+                rows.append((to_iso_date(obs.get("date")), value))
+        return rows
     except requests.RequestException as e:
         # The request URL carries the API key, and requests puts the URL in
         # its exception text -- log the status and series only.
         status = getattr(getattr(e, "response", None), "status_code", "no response")
         print(f"Error fetching FRED {series_id}: HTTP {status}")
-        return None, None, None, None, None
+        return []
     except Exception as e:
         print(f"Unexpected error fetching FRED {series_id}: {type(e).__name__}")
+        return []
+
+
+def get_fred_series(series_id, limit=40):
+    """
+    Returns (current, day_delta, week_delta, month_delta, as_of) as level
+    changes in percentage points, since FRED rate/spread series are already
+    expressed in %. One API call per series.
+    """
+    rows = get_fred_observations(series_id, limit)
+    if not rows:
         return None, None, None, None, None
+    values = [value for _, value in rows]
+    return (
+        values[0],
+        _level_change(values, 1),
+        _level_change(values, 5),
+        _level_change(values, 21),
+        rows[0][0],
+    )
 
 
 def _yahoo_metric(key, label, ticker, unit=UNIT_INDEX):

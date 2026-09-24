@@ -206,7 +206,7 @@ class MassiveClient:
                 # Name only: the exception text repeats the URL and request.
                 failure = type(exc).__name__
             elapsed = self.clock() - started
-            wait_note = f" (waited {waited:.0f}s for the rate limit)" if waited else ""
+            wait_note = f" (waited {waited:.0f}s for the rate limit)" if waited >= 0.5 else ""
 
             if status == 200:
                 try:
