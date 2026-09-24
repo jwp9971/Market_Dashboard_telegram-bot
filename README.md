@@ -120,6 +120,12 @@ Optional: `ETF_SOURCE` (`alpaca` default, or `yahoo`), `ANTHROPIC_MODEL`
 `ANTHROPIC_EFFORT` (default `medium`), `ALPACA_FEED` (`sip` default, or
 `iex`), `DRY_RUN` (see below).
 
+**Weekly commentary (experimental, `weekly-commentary` branch only):**
+`MASSIVE_API_KEY` is the key for the Massive market-data API (free Basic plan).
+The daily report doesn't use it. Massive's terms forbid publishing their data,
+so real responses are cached only in the gitignored `cache/` folder. The test
+fixtures are synthetic.
+
 ### Install and run
 
 ```bash
@@ -226,6 +232,9 @@ src/
   analyst.py            Prompt, Claude call, quality gates, fallback
   dashboard.py          Renders the snapshot
   telegram_bot.py       Delivery and message splitting
+  massive_client.py     Massive API access: rate limit, retries, cache, call budget (weekly)
+scripts/
+  massive_probe.py      Manual live check of the Massive API (never run in Actions)
 tests/                  Network-free test suite
 ```
 
