@@ -64,6 +64,7 @@ _stub("alpaca.data.enums", DataFeed=_DataFeed, Adjustment=_Adjustment)
 for var in (
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY", "FRED_API_KEY", "ANTHROPIC_API_KEY",
+    "MASSIVE_API_KEY",
 ):
     os.environ.pop(var, None)
 
