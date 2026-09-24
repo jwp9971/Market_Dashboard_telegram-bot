@@ -1,0 +1,62 @@
+name: Weekly Commentary
+
+# Saturday 03:00 UTC = 12:00 KST, six hours after Friday's close: Cboe had
+# updated its VIX file by 01:51 GMT the day after a session, and Massive had
+# the previous session by 05:00 UTC. Rates and credit still show Thursday
+# (FRED / Economy API run a business day late). GitHub may start it 1-2 h late.
+# The Run button (workflow_dispatch) works from the default branch.
+#
+# Massive's terms forbid publishing its data and this repository's logs are
+# public: no DRY_RUN here, no artifacts, no actions/cache. The job fetches
+# fresh each run and logs only statuses and counts.
+on:
+  schedule:
+    - cron: '0 3 * * 6'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-commentary
+  cancel-in-progress: false
+
+jobs:
+  run-weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run weekly commentary
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          # Repository variables (Settings > Secrets and variables > Actions >
+          # Variables). Empty means the code defaults: claude-sonnet-5 / high.
+          WEEKLY_ANTHROPIC_MODEL: ${{ vars.WEEKLY_ANTHROPIC_MODEL }}
+          WEEKLY_ANTHROPIC_EFFORT: ${{ vars.WEEKLY_ANTHROPIC_EFFORT }}
+        # weekly_main.py exits 0 = OK, 1 = failed, 2 = delivered but degraded.
+        run: |
+          set +e
+          python src/weekly_main.py
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "### Weekly report delivered (OK)" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) echo "### Weekly report delivered but DEGRADED - check the log for warnings" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "### Weekly report FAILED (exit $code)" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          exit $code

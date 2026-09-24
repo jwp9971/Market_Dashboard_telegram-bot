@@ -6,6 +6,11 @@ note grounded only in that data, and delivers both the raw snapshot and the
 commentary to Telegram. It runs on a GitHub Actions schedule with no server
 and no database.
 
+**Since 2026-09-24 the scheduled report is the weekly commentary.** Every
+Saturday it covers the Monday–Friday week just ended, measured on week-end
+closes (1W / 1M / 3M), and runs from `src/weekly_main.py`. The daily report
+described below is still in the code and can be run by hand.
+
 Built as a self-directed learning project with no prior programming
 background, through iterative AI-assisted development.
 
@@ -120,6 +125,47 @@ Optional: `ETF_SOURCE` (`alpaca` default, or `yahoo`), `ANTHROPIC_MODEL`
 `ANTHROPIC_EFFORT` (default `medium`), `ALPACA_FEED` (`sip` default, or
 `iex`), `DRY_RUN` (see below).
 
+**Weekly commentary (experimental, `weekly-commentary` branch only):**
+`MASSIVE_API_KEY` is the key for the Massive market-data API (free Basic plan).
+The daily report doesn't use it. Massive's terms forbid publishing their data,
+so real responses are cached only in the gitignored `cache/` folder. The test
+fixtures are synthetic.
+
+The weekly numbers cover the last completed Monday-Friday week, measured on
+week-end closes. 1W compares with the previous week's close, 1M with four
+weeks back and 3M with thirteen. ETF changes are price-only (Massive does not
+adjust for dividends). Futures use the official settlement of the most-traded
+nearby contract.
+
+The weekly snapshot (`src/weekly_dashboard.py`) shows each row on two lines,
+the name and value first and then 1W / 1M / 3M underneath. It opens with the
+week's three best and three worst ETFs. A week is **degraded** when VIX, HY
+OAS or the 10Y is unusable, or every ETF is. Single gaps, values dated before
+Friday and the VIX fallback are footer notes only.
+
+Claude's weekly note has six sections: Regime Read, Market Read, Leadership,
+Trend View, What Doesn't Fit and Next Week Watch. It aims for about 700
+words and is flagged if it runs under 150 or over 1,000. The weekly note has
+its own model settings, separate from the daily ones:
+
+- `WEEKLY_ANTHROPIC_MODEL` (default `claude-sonnet-5`)
+- `WEEKLY_ANTHROPIC_EFFORT` (default `high`)
+
+To run the weekly report locally:
+
+```powershell
+$env:DRY_RUN=1; python src/weekly_main.py    # prints both messages, sends nothing
+Remove-Item Env:DRY_RUN; python src/weekly_main.py   # sends both messages to Telegram
+```
+
+The weekly workflow (`.github/workflows/weekly-commentary.yml`) is manual
+only. It refuses `DRY_RUN`, because Actions logs are public.
+
+Switching to a larger model is only a change to that setting. The note ends
+with a line naming the model that wrote it. If Claude declines, fails or is
+unavailable, a deterministic fallback note is sent with a ⚠️ warning
+explaining why.
+
 ### Install and run
 
 ```bash
@@ -147,13 +193,19 @@ python -m pytest -q              # no network, no API keys, no messages
 
 ## Schedule
 
-`0 23 * * 0-4` UTC — **08:00 Korea time, Monday to Friday**, covering the
-previous US session.
+**Weekly report:** `0 3 * * 6` UTC, which is **12:00 Korea time every
+Saturday**, covering the Monday–Friday week just ended. It runs six hours
+after Friday's close so that Friday's ETF, futures and VIX data have been
+published. Rates and credit still show Thursday, because those sources run
+one business day behind; the report's footer says so.
+
+**Daily report:** manual only (the Run workflow button). Its old schedule was
+`0 23 * * 0-4` UTC (08:00 Korea time, Monday to Friday) and can be restored
+in `.github/workflows/daily-dashboard.yml`.
 
 GitHub's scheduled workflows are best-effort and are frequently delayed;
-observed runs have started 1–2 hours late. Schedules on public repositories
-are also disabled after 60 days without repository activity. There is no
-delivery-time guarantee.
+observed runs have started 1–2 hours late. There is no delivery-time
+guarantee.
 
 ---
 
@@ -226,6 +278,15 @@ src/
   analyst.py            Prompt, Claude call, quality gates, fallback
   dashboard.py          Renders the snapshot
   telegram_bot.py       Delivery and message splitting
+  massive_client.py     Massive API access: rate limit, retries, cache, call budget (weekly)
+  massive.py            Weekly: ETFs, Treasury yields, futures from Massive
+  cboe.py               Weekly: VIX from Cboe's public history file
+  weeks.py              Weekly: Mon-Fri week-end closes and 1W / 1M / 3M changes
+  weekly_snapshot.py    Weekly: assembles every weekly number (local print only)
+  weekly_dashboard.py   Weekly: snapshot text, movers, footer notes, degraded rule
+  weekly_analyst.py     Weekly: Claude prompt, quality gates, fallback note
+scripts/
+  massive_probe.py      Manual live check of the Massive API (never run in Actions)
 tests/                  Network-free test suite
 ```
 

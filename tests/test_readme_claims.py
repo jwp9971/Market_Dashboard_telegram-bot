@@ -49,15 +49,20 @@ def test_removed_overclaims_stay_removed():
 def test_every_required_env_var_is_documented():
     for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "ANTHROPIC_API_KEY",
                 "FRED_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY",
-                "ANTHROPIC_MODEL", "ALPACA_FEED", "DRY_RUN"):
+                "ANTHROPIC_MODEL", "ALPACA_FEED", "DRY_RUN", "MASSIVE_API_KEY",
+                "WEEKLY_ANTHROPIC_MODEL", "WEEKLY_ANTHROPIC_EFFORT"):
         assert var in README, f"{var} is read by the code but undocumented"
 
 
 def test_the_schedule_matches_the_workflow():
-    workflow = (ROOT / ".github/workflows/daily-dashboard.yml").read_text()
-    cron = re.search(r"cron:\s*'([^']+)'", workflow).group(1)
-    assert cron == "0 23 * * 0-4"
+    """Since 2026-09-24 the weekly report is the scheduled bot; the daily one
+    is manual only."""
+    weekly = (ROOT / ".github/workflows/weekly-commentary.yml").read_text(encoding="utf-8")
+    cron = re.search(r"^\s*- cron:\s*'([^']+)'", weekly, re.MULTILINE).group(1)
+    assert cron == "0 3 * * 6"
     assert cron in README
+    daily = (ROOT / ".github/workflows/daily-dashboard.yml").read_text(encoding="utf-8")
+    assert not re.search(r"^\s*- cron:", daily, re.MULTILINE)
 
 
 def test_exit_codes_are_documented():

@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-Local environment is Windows + VS Code + PowerShell. CI runs Ubuntu / Python 3.12.
+Local environment is Windows + VS Code + PowerShell, **Python 3.14** in the project's own `venv\` (the pinned lock installs and the full suite passes on it). CI runs Ubuntu / **Python 3.12** — write code that works on both.
 
 ```powershell
 .\venv\Scripts\Activate.ps1          # if blocked: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
@@ -33,13 +33,14 @@ python -m compileall -q src                           # syntax check, as CI does
 $env:DRY_RUN=1; python src/main.py    # full live pipeline, prints Telegram messages instead of sending (costs one Claude call)
 python src/macro.py                   # print just the macro snapshot
 python src/sectors.py                 # print just the ETF snapshot
+python scripts/massive_probe.py       # weekly branch: live Massive check (~8 free calls; by hand only, never in Actions)
 ```
 
 `requirements-direct.txt` records the packages actually imported; `requirements.txt` is the full lock.
 
-## Architecture (current daily bot, on `main`)
+## Architecture (daily bot)
 
-Scheduled by `.github/workflows/daily-dashboard.yml` at `0 23 * * 0-4` UTC = **08:00 KST Mon–Fri**. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
+**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, `0 3 * * 6` UTC = Saturday 12:00 KST; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` keeps its Run button, and its old cron `0 23 * * 0-4` is noted in a comment there. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
 
 Data flow:
 
@@ -81,52 +82,117 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 ## Weekly Commentary — the active project
 
-**Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (not created yet) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
+**Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (created 2026-09-24 from `main`) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
 
-**Status:** Massive API key obtained, stored in the local `.env` as `MASSIVE_API_KEY`, connection confirmed. Confirm whether it is also in GitHub Secrets before any workflow needs it.
+**Status:** Stages A–G are done on the branch. The weekly report replaces the daily bot once `weekly-commentary` is merged to `main` (by the user, after making the repo private).
+- `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. The values were cross-checked against Cboe and Yahoo on 2026-09-24.
+- `python src/weekly_dashboard.py` previews the real Telegram text locally: ~3,000 characters, one message.
+- `python src/weekly_analyst.py` writes Claude's note locally, costing one Claude call. The live test on 2026-09-24 used Sonnet 5: 3.6k input and 3.4k output tokens (≈ $0.04), 683 words, `end_turn`, and every number checked matched the snapshot.
+- `python src/weekly_main.py` runs the whole weekly job. On 2026-09-24:
+  - A `DRY_RUN` gave exit 0; message 1 was 2,999 characters and message 2 was 3,833 (one part each); no Markdown.
+  - The **first real send reached the user's Telegram chat**: exit 0, `claude-sonnet-5`, 3.7k input and 3.7k output tokens.
+- `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets. No GitHub run has used it yet, because the workflow can't run until it's on `main`.
 
-### Massive Basic tier — constraints that shape the design
+Next: the first GitHub run after the merge (see Stage G decisions). After that, new data and content ideas from the user.
 
-From the user's research note (2026-09-22); verify against Massive docs when implementing.
+### Massive data terms — hard rules
 
-- **5 REST requests/minute per asset class** (Stocks, Options, Indices, Currencies, Futures). Extra API keys do not add capacity.
+Massive's market-data terms limit use to **personal, non-commercial** use. They forbid publishing, displaying or transferring the data to third parties, and derived indices need a licence. The repo **and its Actions logs** are public. So:
+
+- **Never commit Massive data.** Test fixtures in `tests/fixtures/massive/` are **synthetic**: the documented shape with made-up numbers. Real responses live only in the gitignored `cache/`.
+- **Never print Massive values in Actions.** Log only the endpoint, status, counts and dates. No `DRY_RUN` in Actions. Don't put Massive data in artifacts or the Actions cache: the weekly job fetches fresh on each run (Stage F).
+- The Telegram chat is the user alone, which counts as personal use.
+
+**Terms review (2026-09-24, from the full terms page) — the user accepted the residual risk and chose not to email Massive for now:**
+- **Fine:**
+  - Code in the repo isn't Market Data. A search of every file and the full git history found no real Massive values.
+  - Running on GitHub's runners is not "transmitting … for publication or distribution" (§2).
+  - The user is the only end user (§1).
+- **Open ambiguity 1:** sending Massive numbers to Claude. §5(c) forbids transferring the data or "analytics, research … derived from" it to any third party. §5(d) forbids "non-display use" unless licensed, and §2 says "strictly for display use only". This applies wherever the bot runs, laptop included.
+- **Open ambiguity 2:** CME "Non-Professional" status (§4.3). CME's definition includes "has an active futures trading account". This affects the WTI / gold / copper data.
+- **If Massive ever objects:** the fix is to keep Massive values out of the Claude prompt, or drop Massive futures. Deleting all Market Data on termination (§8) means clearing the local `cache/`.
+- **Other sources:** FRED (ICE BofA OAS), Yahoo and Cboe have similar personal-use terms; the same no-values-in-logs rule covers them.
+- **Don't compute DXY (or any index) from Massive FX pairs.** The terms treat that as a derived index.
+
+### Massive Basic tier — confirmed (docs + live probe, 2026-09-24)
+
+- Base URL `https://api.massive.com`. Auth is via the header `Authorization: Bearer <key>` (a `?apiKey=` parameter also works, but it would leak into URLs). The client only uses the header.
+- **5 REST requests/minute per asset class**, each class counted separately. Reference endpoints have their own bucket. Economy isn't named, so the client gives it its own 5/min bucket. Over the limit → **429** with no `Retry-After`. Not entitled → **403** `NOT_AUTHORIZED`. Extra API keys don't add capacity.
 - EOD data, ~2 years history (indices 1+ year). No snapshots, trades, quotes, WebSockets or flat files.
-- **Grouped daily** `/v2/aggs/grouped/locale/us/market/stocks/{date}` returns the whole US equity market's daily OHLCV **in one call** — use it for all ETFs instead of one call per ticker.
-- **Economy API** (`/fed/v1/treasury-yields`, `/fed/v1/inflation`, `/fed/v1/inflation-expectations`, `/fed/v1/labor-market`, `/fed/v1/funding-conditions`) covers the full Treasury curve, inflation and funding conditions.
+- **Grouped daily** `/v2/aggs/grouped/locale/us/market/stocks/{date}` returns the whole US market (~12,600 rows) **in one call**. **All 22 ETFs were present.** Fields: `T,o,h,l,c,v,vw,n,t`.
+  - Closes are split-adjusted, but **never dividend-adjusted**, so returns are price-only. The daily bot uses total return; this difference must be disclosed.
+  - A **weekend date returns 200 `OK`, `resultsCount: 0`, and no `results` key at all**. Treat a missing or empty `results` as "no session" (this also covers holidays).
+- **Treasury yields** `/fed/v1/treasury-yields` (`date.gte`, `sort=date.desc`, `limit`):
+  - Fields actually returned: `date, yield_1_month, yield_3_month, yield_1_year, yield_2_year, yield_5_year, yield_10_year, yield_30_year`. The docs also list 6M/3Y/7Y/20Y, but those were absent.
+  - Latest row is **one business day behind** (09-22 on 2026-09-24 KST), the same lag as FRED.
+- **Futures** (`/futures/v1/contracts`, `/futures/v1/aggs/{contract}?resolution=1session`). The docs were wrong in places. Solved in Stage C (`massive.get_futures_series`):
+  - Codes: **CL** (NYMEX `XNYM`), **GC** and **HG** (COMEX `XCEC`). There is no continuous ticker, and no `days_to_maturity` field.
+  - **Without `date=`, contracts come back once per contract per day back to 2025**, so a page covers almost nothing. `sort` accepts only `date`, `product_code` and `ticker`. The `type` label is unreliable: spreads like `CL:BF F7-G7-H7` are labelled `"single"`.
+  - The working query: build the next 8 monthly tickers (`GCV6, GCX6, …`) and request them with `ticker.any_of`, plus `date=<week's Friday>`. If that returns empty, retry the day before: the current day's snapshot can be empty, as it was for gold on 09-24.
+  - Keep only outrights (regex `^CODE[FGHJKMNQUVXZ]\d{1,2}$`) and skip contracts within 14 days of `last_trade_date`. The expiring month otherwise pushes December gold out of the top 3. Then take the **most traded (last 5 sessions) of the next 3**.
+  - On 2026-09-24 this picked CLX6, GCZ6 and HGZ6, the benchmark months.
+  - Bars come **newest first**. `window_start` is the previous calendar day, so **date by `session_end_date`**. A bar with `settlement_price: null` is a session still trading and must be dropped. Values use `settlement_price`.
+- **The rate limit is counted server-side across processes.** Two probe runs less than a minute apart got a 429. The client's retry handled it.
+- **DXY is not on Massive.** A reference search for "DXY" found only unrelated stocks.
 - **Not available on Basic:** SPX, DJI, RUT and **VIX** index values; HY/IG credit spreads; financial statements.
-- `vX` endpoints (SEC filings, float, etc.) are less stable than `v1`–`v3`.
+- The `vX` endpoints are less stable than `v1`–`v3`.
 
-### Planned source map
+### Source map (agreed 2026-09-24)
 
-| Data | Weekly source |
-|---|---|
-| 22 ETFs | Massive grouped daily (Stocks) — replaces Alpaca; fixes the IEX thin-ETF problem |
-| Treasury curve, inflation, funding | Massive Economy |
-| WTI / gold / copper | Massive Futures (or keep Yahoo — user decision) |
-| DXY / USD-KRW | Massive Currencies (or keep Yahoo — user decision) |
-| HY / IG OAS | **stays FRED** (Massive gap) |
-| VIX | **stays Yahoo `^VIX`** (Massive Basic excludes it; CBOE later) |
+Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, funding, more ETFs…) comes only after the foundation works — the user will add it.
+
+| Data | Weekly source | To verify |
+|---|---|---|
+| 22 ETFs | Massive Stocks grouped daily — replaces Alpaca; fixes the IEX thin-ETF problem | ✅ all 22 present; price-only (not dividend-adjusted) |
+| 10Y / 2Y (→ 2s10s) | Massive Economy `/fed/v1/treasury-yields` | ✅ works; one business day behind, like FRED |
+| WTI / gold / copper | Massive Futures: settlement of the most-traded nearby contract; all horizons from that one contract (no roll jumps) | ✅ |
+| DXY | **Yahoo `DX-Y.NYB`** (decided 2026-09-24; not on Massive, and computing it from Massive FX is ruled out by the terms) | ✅ |
+| HY / IG OAS | **FRED, unchanged** (Massive gap; one-day lag known and disclosed) | IG kept by assumption — user may drop it |
+| VIX | **Cboe public CSV** `https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv` (no key; `DATE,OPEN,HIGH,LOW,CLOSE`, MM/DD/YYYY; from 1990). **Falls back to Yahoo `^VIX`** when Cboe lacks the week's last session | At 05:00 UTC on 2026-09-24 it still ended at 09-22 (updated 01:51 GMT 09-23), so it runs **more than a session behind** |
+| USD/KRW | **dropped** from the weekly report (daily bot unchanged) | — |
 
 ### Design decisions already agreed
 
-- **Request queue → per-asset-class rate limiter → REST → cache.** Each class spaces calls ~12 s apart (configurable). Retry with backoff on HTTP 429. A per-run budget guard asserts calls stay under quota.
-- **The rate limiter takes an injectable clock/sleep** so tests run instantly.
-- **Cache aggressively:** EOD data doesn't change within a week. Raw responses cached as JSON on disk (`cache/`, gitignored). The same saved responses double as test fixtures.
-- **Only one script calls live Massive** (`scripts/record_fixtures.py`); everything else replays saved data.
-- **The repo is public:** commit only small, hand-trimmed fixtures (the tickers actually used), not full grouped-daily dumps — both for size and because redistributing Massive data may breach their terms.
-- **Weekly cadence:** drop day-over-day emphasis, reframe around 1W/1M/3M, curve shape, inflation trend, funding conditions and realised volatility. "1W" means 5 observations, not a calendar week — say so in the report.
-- The weekly job gets its **own workflow file, `workflow_dispatch` only** until the user decides to schedule it. Don't modify `daily-dashboard.yml` on the branch.
-- Experimental sends go to a **test Telegram chat** (`TELEGRAM_BOT_TOKEN_TEST` / `TELEGRAM_CHAT_ID_TEST`), never the real one.
+- **`src/massive_client.py` (built in Stage B)** is the only way code reaches Massive. It uses plain `requests` (no official SDK).
+  - A **rolling-window limiter per asset class** (`stocks, economy, futures, currencies, reference`, 5 per 60 s + 1 s margin): the first 5 calls go at once, and the 6th waits. The clock and sleep are injectable.
+  - Retries: **429** waits 60 s (2 retries); **5xx or a dropped connection** waits 5 s then 15 s; **401/403** raises `MassiveAuthError` at once.
+  - A **per-run budget** (`max_calls`, default 40) raises `MassiveBudgetExceeded` *before* sending a request. Retries count against it; cache hits don't.
+  - The **cache is opt-in per call** (`cache=True`). Use it only for settled past dates, so an early empty answer never gets frozen. Files go to `cache/massive/<class>/<path>__<hash>.json`.
+  - The log shows counts, never values, and never the key. `next_url` paging isn't built; a response that has more pages logs a warning.
+- **Only one script calls live Massive: `scripts/massive_probe.py`** (renamed from `record_fixtures.py`, since fixtures are synthetic). Run it by hand only. It prints structure, not values, and saves the raw answers to `cache/`.
+- **Weekly cadence:** drop day-over-day emphasis, reframe around 1W/1M/3M, curve shape and realised volatility.
+- **A week is a Monday–Friday calendar week, measured on week-end closes** (built in Stages C/D):
+  - 1W = this week's last close vs the previous week's last close.
+  - 1M = vs 4 weeks earlier; 3M = vs 13 weeks earlier.
+  - "Last close" = the week's final trading day — usually Friday, Thursday if Friday is a holiday. Take the last available bar inside the Mon–Fri window rather than using a holiday calendar.
+  - Not "the last 5 observations". **Built in `src/weeks.py`**: every collector hands in a dated daily series and `weekly_metric()` makes the `Metric`. Weekly metrics carry `horizons=WEEKLY_HORIZONS` (1W/1M/3M, with 3M in the new `quarter_change`); daily ones keep the default and render byte-identically.
+  - **The report always covers the last completed week** (Friday's 21:00 UTC close has passed), even when it runs midweek.
+  - No observation inside the target week means the value is **missing** ("no data in the week of …"), never last week's number.
+  - A 1M/3M with no prior close is simply left out. AIHY (listed 07-21) and NCLD (listed 08-06) have no 3M yet.
+- **Weekly workflow (`.github/workflows/weekly-commentary.yml`, Stage F):**
+  - `workflow_dispatch` only. It uses the secrets `TELEGRAM_*`, `ANTHROPIC_API_KEY`, `FRED_API_KEY` and `MASSIVE_API_KEY`, and takes `WEEKLY_ANTHROPIC_MODEL` / `_EFFORT` from repository **variables** (`vars.*`; empty means the code defaults).
+  - It has no `DRY_RUN`, no artifacts and no `actions/cache`. `tests/test_weekly_main.py` enforces all of this.
+  - GitHub shows the "Run workflow" button only once the file is on `main`. **The user chose local runs only until Stage G**, so the file is inert on the branch.
+  - Don't modify `daily-dashboard.yml`.
+- **Telegram: the real chat**, no test chat (the daily bot is inactive, so no clash). `DRY_RUN=1` is the safety switch while developing. So `telegram_bot.py` needs no chat-override change.
 
-Proposed layout (confirm with the user before creating):
+### Layout (agreed): flat, no separate folder
+
+The branch is the separation; new files sit beside the existing ones and are named by purpose. Existing modules import each other by bare name (`from metrics import Metric`), so a subfolder would need extra import plumbing.
 
 ```
-src/massive_client.py      HTTP + per-class rate limiter + cache + budget guard
-src/massive.py             Massive collectors → Metric records
-scripts/record_fixtures.py the only live-Massive caller
-tests/fixtures/massive/    small trimmed JSON samples (committed)
+src/massive_client.py      HTTP + per-class rate limiter + cache + budget guard   (B)
+src/massive.py             Massive collectors → Metric records                    (C)
+src/weekly_dashboard.py    weekly snapshot layout                                  (D)
+src/weekly_analyst.py      weekly prompt, required sections, fallback              (E)
+src/weekly_main.py         weekly entry point + exit code                          (F)
+scripts/massive_probe.py   the only live-Massive caller, run by hand               (B)
+tests/fixtures/massive/    synthetic JSON samples (committed; never real data)
 cache/                     runtime response cache (gitignored)
 ```
+
+Reuse as-is: `metrics.Metric` + freshness helpers, `macro.get_fred_series` / `_fred_metric` (OAS), `sectors.ETF_GROUPS` / `SECTOR_GROUP_KEYS` / `GROUP_TITLES`, `telegram_bot` splitting/sending, `dashboard.report_date` / `_section` / `format_as_of_label`, `main.decide_exit_code`.
+Small edits to shared files (keep the daily output identical — the existing suite proves it): `metrics.py` gains a 3M horizon; `analyst.call_claude` / `check_analysis_quality` accept a prompt and section list, with the daily ones as defaults.
 
 ### Stages
 
@@ -134,28 +200,58 @@ Each stage gets an overview and a user decision before any code.
 
 | Stage | Work |
 |---|---|
-| A | Create `weekly-commentary` from `main`; confirm `MASSIVE_API_KEY` in GitHub Secrets; manual-only weekly workflow skeleton; test-chat env vars |
-| B | Massive client foundation: per-class limiter (injectable clock), retry/backoff, raw cache, budget guard, record script, fake-clock tests |
-| C | Massive collectors → `Metric` (grouped-daily ETFs, Economy, optionally Futures/FX); keep FRED (OAS) and Yahoo (VIX) |
-| D | Weekly snapshot + dashboard sections (curve, inflation, funding), footer notes for supplementary sources |
-| E | Weekly prompt and fallback rewritten for the weekly framing |
-| F | Integration: `DRY_RUN`, test chat, manual dispatch, tuning |
-| G | User decides: replace the daily bot / run both / abandon → merge to `main` or not |
+| A ✅ | Local `venv` (Python 3.14); `weekly-commentary` from `main`; `cache/` gitignored; decisions recorded; user confirms `MASSIVE_API_KEY` in GitHub Secrets |
+| B ✅ | Massive client foundation: per-class limiter (injectable clock), retry/backoff, raw cache, budget guard, probe script, fake-clock tests, live probe |
+| C ✅ | `weeks.py`, `massive.py`, `cboe.py`, `weekly_snapshot.py`; `macro.get_fred_observations` / `get_yfinance_closes` (the daily `get_fred_series` now wraps the first, same output); `Metric.quarter_change` + `horizons` |
+| D ✅ | `weekly_dashboard.py`: two-line rows (`Metric.render_block`), a movers block, footer notes, `is_weekly_degraded` |
+| E ✅ | `weekly_analyst.py`: weekly prompt (6 sections, ~700 words), gates 150–1,000, deterministic fallback, own model settings, Markdown stripped; `analyst.call_claude` / `check_analysis_quality` take per-call settings and report refusals |
+| F ✅ | `weekly_main.py` (fetch, format, analyse, send, exit code; reuses `send_analysis_report` / `decide_exit_code`; refuses `DRY_RUN` inside Actions); inert manual workflow; local dry run + first real send |
+| G ✅ | Weekly replaces daily: weekly cron `0 3 * * 6`, daily manual only; the repo goes private; terms review recorded; crash-safe logging; then `weekly-commentary` → `main` by PR |
 
-### Open questions to settle before Stage B
+### Stage D decisions (2026-09-24)
 
-1. Does the Economy API have its own 5/min queue, or share one?
-2. Auth style (query parameter vs header).
-3. Does grouped daily return adjusted closes, and is there an `adjusted` parameter?
-4. Futures and FX: Massive or keep Yahoo?
-5. Delivery shape: same two Telegram messages, or a different weekly layout?
+- **Delivery: two messages, like the daily bot.** Message 1 is the snapshot (`format_weekly_dashboard`), message 2 is Claude's note. Reuse `telegram_bot.send_analysis_report` in Stage F.
+- **Rows take two lines:** `• Name (SYM)  value`, then `   1W ▲x · 1M ▼y · 3M ▲z`, built by `Metric.render_block()` / `format_changes_compact()`. A row with no changes (the Gold/Copper ratio) takes one line.
+- **Movers block:** the top 3 and bottom 3 ETFs by 1W, from usable rows only.
+- **Footer:**
+  - source facts from the snapshot: contracts used, VIX fallback
+  - ETFs are price-only
+  - values dated before Friday
+  - 3M unavailable (under 13 weeks of history)
+  - missing rows
+  - The derived notes live in `weekly_dashboard.weekly_data_notes`; `weekly_snapshot.source_notes` supplies only the source facts.
+- **Degraded** (`is_weekly_degraded`) when VIX, HY OAS or 10Y is unusable, or every ETF is. Everything else is a note only.
+
+### Stage E decisions (2026-09-24)
+
+- **Sections:** Regime Read, Market Read, Leadership, Trend View, What Doesn't Fit, Next Week Watch. About 700 words; gates at 150 / 1,000. The check accepts a curly apostrophe (Doesn’t).
+- **Model:** `WEEKLY_ANTHROPIC_MODEL` (default `claude-sonnet-5`) and `WEEKLY_ANTHROPIC_EFFORT` (default `high`), separate from the daily settings.
+  - The user plans to move to a larger model later. The request shape (adaptive thinking + `output_config.effort`, `max_tokens` 16000, no prefill) is valid on Sonnet 5, Opus 5, Opus 5.5 and Fable 5.1, so that's an env change only.
+  - When they switch to Opus 5 / Fable 5.1, **offer Anthropic's server-side refusal `fallbacks`** (beta; see the claude-api skill). They weren't enabled for Sonnet 5.
+  - A refusal currently becomes the deterministic fallback with the warning "Claude declined (<category>)".
+- The note is **signed** `— <model> · effort <effort>`.
+- **Markdown handling:** the live run returned Markdown headings, so the prompt now asks for plain text and `weekly_analyst.plain_text()` strips `#` headings and `**` / `__` markers before sending.
+  - The fixed prompt has **not yet been seen live**; check it in Stage F's `DRY_RUN`.
+- The prompt gets breadth ("X of N up over 1W / 1M / 3M") computed in code, the movers and the footer notes. The HYG price-only caveat is spelled out.
+
+### Stage G decisions (2026-09-24)
+
+- **Weekly replaces daily.**
+  - `weekly-commentary.yml` runs on `cron: '0 3 * * 6'` = **Saturday 12:00 KST** and keeps its Run button.
+  - `daily-dashboard.yml` lost only its `schedule:`. It is manual-only now, and a comment there shows the old cron for restoring it. Tests enforce both (`test_weekly_main.py`, `test_readme_claims.py`).
+- **Why that hour:** it is six hours after Friday's close. Cboe updated its VIX file at 01:51 GMT the day after a session, and Massive had the previous session by 05:00 UTC. Rates and credit still show Thursday; the footer says so. GitHub may start runs 1–2 h late.
+- **The repository goes private** (the user does this in Settings, *before* the merge to `main`), so Actions logs are no longer public. The no-values-in-logs rules still apply.
+- **`weekly_main.main()` catches any unexpected exception and prints only its type.** An exception message or traceback can quote a value.
+- The test fixtures' real Cboe VIX numbers were replaced with invented ones.
+- **Remaining after merge:** the first GitHub run (Run workflow on `main`). Check for `MassiveAuthError` (a wrong secret), that Yahoo (DXY, and VIX fallback) answers from GitHub's runners, and the "delivered (OK)" summary.
+- **Model:** the user may later set the repository variable `WEEKLY_ANTHROPIC_MODEL` to a larger model. Offer the server-side refusal `fallbacks` then.
 
 ## Git workflow
 
 One local folder; switch branches in place (VS Code shows the current branch bottom-left).
 
 - `main` mirrors the live bot. **Never commit to it directly** — it changes only through merged PRs, then `git pull`.
-- `weekly-commentary` holds the experiment. Suggested default: a short-lived branch per stage off `weekly-commentary` → PR into `weekly-commentary` (CI runs; the web session can review) → the user merges. Propose this at Stage A and let the user choose.
+- `weekly-commentary` holds the experiment. **Agreed:** one short-lived branch per stage (`weekly/stage-b`, …) off `weekly-commentary` → PR into `weekly-commentary` (base must **not** be `main`; CI runs; the web session can review) → the user merges → `git checkout weekly-commentary; git pull`.
 - Commit or stash before switching branches. The shared `.env` and `venv` stay put across switches; after switching, `pip install -r requirements.txt` if dependencies differ.
 - Switching branches locally cannot affect production — the live bot runs from GitHub `main` via Actions.
 

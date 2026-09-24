@@ -44,6 +44,9 @@ UP = "▲"
 DOWN = "▼"
 
 HORIZONS = (("D/D", "day_change"), ("1W", "week_change"), ("1M", "month_change"))
+# The weekly commentary measures on Mon-Fri week-end closes: 1W is one week
+# back, 1M four and 3M thirteen (see weeks.py). Same fields, different spans.
+WEEKLY_HORIZONS = (("1W", "week_change"), ("1M", "month_change"), ("3M", "quarter_change"))
 
 
 def to_iso_date(value: Any) -> Optional[str]:
@@ -85,6 +88,11 @@ class Metric:
     # Set by mark_staleness() so status stays a pure function of the record
     # rather than silently depending on when it happens to be read.
     stale: bool = False
+    # Weekly-only 13-week change; the daily report never sets it.
+    quarter_change: Optional[float] = None
+    # Which changes this record carries and shows. The first one is the
+    # headline: missing it makes the record "partial" and renders "N/A".
+    horizons: tuple = HORIZONS
 
     @property
     def status(self) -> str:
@@ -95,7 +103,7 @@ class Metric:
             return "missing"
         if self.stale:
             return "stale"
-        if self.day_change is None and self.tracks_changes:
+        if self.tracks_changes and getattr(self, self.horizons[0][1]) is None:
             return "partial"
         return "ok"
 
@@ -121,8 +129,8 @@ class Metric:
         return age is not None and age > self.max_age_days
 
     def change(self, horizon: str) -> Optional[float]:
-        """Numeric change over one named horizon: 'D/D', '1W' or '1M'."""
-        for name, attribute in HORIZONS:
+        """Numeric change over one of this record's horizons, e.g. 'D/D' or '3M'."""
+        for name, attribute in self.horizons:
             if name == horizon:
                 return getattr(self, attribute)
         return None
@@ -142,26 +150,43 @@ class Metric:
             return f"{self.value:,.1f}"
         return f"{self.value:,.2f}"
 
+    def format_change(self, horizon: str) -> Optional[str]:
+        """One change as shown, e.g. '▲0.36%' or '▼0.02pts'; None if absent."""
+        change = self.change(horizon)
+        if change is None:
+            return None
+        suffix = "%" if self.change_kind == CHANGE_PCT else "pts"
+        # Judge direction on the value actually displayed: a change that
+        # rounds to 0.00 is flat, and "up zero" reads as a mistake.
+        shown = round(change, 2)
+        if shown == 0:
+            return f"{abs(shown):.2f}{suffix}"
+        arrow = UP if shown > 0 else DOWN
+        return f"{arrow}{abs(shown):.2f}{suffix}"
+
+    def _change_parts(self, template):
+        headline = self.horizons[0][0]
+        parts = []
+        for name, _ in self.horizons:
+            shown = self.format_change(name)
+            if shown is None:
+                if name == headline:
+                    parts.append(f"{name} N/A")
+                continue
+            parts.append(template.format(change=shown, name=name))
+        return parts
+
     def format_changes(self) -> str:
+        """'▲0.05pts D/D | ▼0.20pts 1W'"""
         if not self.tracks_changes:
             return ""
-        suffix = "%" if self.change_kind == CHANGE_PCT else "pts"
-        parts = []
-        for name, attribute in HORIZONS:
-            change = getattr(self, attribute)
-            if change is None:
-                if name == "D/D":
-                    parts.append("D/D N/A")
-                continue
-            # Judge direction on the value actually displayed: a change that
-            # rounds to 0.00 is flat, and "up zero" reads as a mistake.
-            shown = round(change, 2)
-            if shown == 0:
-                parts.append(f"{abs(shown):.2f}{suffix} {name}")
-            else:
-                arrow = UP if shown > 0 else DOWN
-                parts.append(f"{arrow}{abs(shown):.2f}{suffix} {name}")
-        return " | ".join(parts)
+        return " | ".join(self._change_parts("{change} {name}"))
+
+    def format_changes_compact(self) -> str:
+        """'1W ▲0.36% · 1M ▼5.46% · 3M ▲2.70%' -- name first, for the weekly rows."""
+        if not self.tracks_changes:
+            return ""
+        return " · ".join(self._change_parts("{name} {change}"))
 
     def format_as_of(self) -> str:
         if not self.as_of:
@@ -187,6 +212,24 @@ class Metric:
         """'S&P 500 (SPY): $612.40 (▲0.42% D/D)'"""
         name = f"{self.label} ({self.symbol})" if self.symbol else self.label
         return f"{name}: {self.render()}"
+
+    def render_block(self) -> str:
+        """
+        Two lines for the weekly snapshot, easier to scan on a phone:
+            'S&P 500 (SPY)  $612.40'
+            '   1W ▼0.34% · 1M ▼0.53% · 3M ▲2.00%'
+        The second line is left out when the record carries no changes.
+        """
+        name = f"{self.label} ({self.symbol})" if self.symbol else self.label
+        if self.error:
+            return f"{name}  N/A ({self.error})"
+        if self.value is None:
+            return f"{name}  N/A"
+        head = f"{name}  {self.format_value()}"
+        if self.stale:
+            head += f"  ⚠ STALE, as of {self.format_as_of()}"
+        changes = self.format_changes_compact()
+        return f"{head}\n   {changes}" if changes else head
 
 
 def missing(key, label, source="", symbol="", error=None, **kwargs) -> Metric:
