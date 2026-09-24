@@ -44,6 +44,9 @@ UP = "▲"
 DOWN = "▼"
 
 HORIZONS = (("D/D", "day_change"), ("1W", "week_change"), ("1M", "month_change"))
+# The weekly commentary measures on Mon-Fri week-end closes: 1W is one week
+# back, 1M four and 3M thirteen (see weeks.py). Same fields, different spans.
+WEEKLY_HORIZONS = (("1W", "week_change"), ("1M", "month_change"), ("3M", "quarter_change"))
 
 
 def to_iso_date(value: Any) -> Optional[str]:
@@ -85,6 +88,11 @@ class Metric:
     # Set by mark_staleness() so status stays a pure function of the record
     # rather than silently depending on when it happens to be read.
     stale: bool = False
+    # Weekly-only 13-week change; the daily report never sets it.
+    quarter_change: Optional[float] = None
+    # Which changes this record carries and shows. The first one is the
+    # headline: missing it makes the record "partial" and renders "N/A".
+    horizons: tuple = HORIZONS
 
     @property
     def status(self) -> str:
@@ -95,7 +103,7 @@ class Metric:
             return "missing"
         if self.stale:
             return "stale"
-        if self.day_change is None and self.tracks_changes:
+        if self.tracks_changes and getattr(self, self.horizons[0][1]) is None:
             return "partial"
         return "ok"
 
@@ -121,8 +129,8 @@ class Metric:
         return age is not None and age > self.max_age_days
 
     def change(self, horizon: str) -> Optional[float]:
-        """Numeric change over one named horizon: 'D/D', '1W' or '1M'."""
-        for name, attribute in HORIZONS:
+        """Numeric change over one of this record's horizons, e.g. 'D/D' or '3M'."""
+        for name, attribute in self.horizons:
             if name == horizon:
                 return getattr(self, attribute)
         return None
@@ -147,11 +155,12 @@ class Metric:
             return ""
         suffix = "%" if self.change_kind == CHANGE_PCT else "pts"
         parts = []
-        for name, attribute in HORIZONS:
+        headline = self.horizons[0][0]
+        for name, attribute in self.horizons:
             change = getattr(self, attribute)
             if change is None:
-                if name == "D/D":
-                    parts.append("D/D N/A")
+                if name == headline:
+                    parts.append(f"{name} N/A")
                 continue
             # Judge direction on the value actually displayed: a change that
             # rounds to 0.00 is flat, and "up zero" reads as a mistake.
