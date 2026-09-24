@@ -84,13 +84,16 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 **Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (created 2026-09-24 from `main`) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
 
-**Status:** Stages A–E are done.
+**Status:** Stages A–F are done.
 - `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. The values were cross-checked against Cboe and Yahoo on 2026-09-24.
 - `python src/weekly_dashboard.py` previews the real Telegram text locally: ~3,000 characters, one message.
 - `python src/weekly_analyst.py` writes Claude's note locally, costing one Claude call. The live test on 2026-09-24 used Sonnet 5: 3.6k input and 3.4k output tokens (≈ $0.04), 683 words, `end_turn`, and every number checked matched the snapshot.
-- `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets. No workflow uses the secret until Stage F.
+- `python src/weekly_main.py` runs the whole weekly job. On 2026-09-24:
+  - A `DRY_RUN` gave exit 0; message 1 was 2,999 characters and message 2 was 3,833 (one part each); no Markdown.
+  - The **first real send reached the user's Telegram chat**: exit 0, `claude-sonnet-5`, 3.7k input and 3.7k output tokens.
+- `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets. No GitHub run has used it yet, because the workflow can't run until it's on `main`.
 
-Next: Stage F.
+Next: Stage G (the user decides).
 
 ### Massive data terms — hard rules
 
@@ -156,7 +159,11 @@ Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, fundi
   - **The report always covers the last completed week** (Friday's 21:00 UTC close has passed), even when it runs midweek.
   - No observation inside the target week means the value is **missing** ("no data in the week of …"), never last week's number.
   - A 1M/3M with no prior close is simply left out. AIHY (listed 07-21) and NCLD (listed 08-06) have no 3M yet.
-- The weekly job gets its **own workflow file, `workflow_dispatch` only** — deferred to **Stage F** (nothing to run before then). GitHub shows the "Run workflow" button only when the workflow file also exists on the default branch (`main`), so at Stage F the user chooses: add an inert button-only file to `main` via PR, or another trigger. Don't modify `daily-dashboard.yml` on the branch.
+- **Weekly workflow (`.github/workflows/weekly-commentary.yml`, Stage F):**
+  - `workflow_dispatch` only. It uses the secrets `TELEGRAM_*`, `ANTHROPIC_API_KEY`, `FRED_API_KEY` and `MASSIVE_API_KEY`, and takes `WEEKLY_ANTHROPIC_MODEL` / `_EFFORT` from repository **variables** (`vars.*`; empty means the code defaults).
+  - It has no `DRY_RUN`, no artifacts and no `actions/cache`. `tests/test_weekly_main.py` enforces all of this.
+  - GitHub shows the "Run workflow" button only once the file is on `main`. **The user chose local runs only until Stage G**, so the file is inert on the branch.
+  - Don't modify `daily-dashboard.yml`.
 - **Telegram: the real chat**, no test chat (the daily bot is inactive, so no clash). `DRY_RUN=1` is the safety switch while developing. So `telegram_bot.py` needs no chat-override change.
 
 ### Layout (agreed): flat, no separate folder
@@ -188,7 +195,7 @@ Each stage gets an overview and a user decision before any code.
 | C ✅ | `weeks.py`, `massive.py`, `cboe.py`, `weekly_snapshot.py`; `macro.get_fred_observations` / `get_yfinance_closes` (the daily `get_fred_series` now wraps the first, same output); `Metric.quarter_change` + `horizons` |
 | D ✅ | `weekly_dashboard.py`: two-line rows (`Metric.render_block`), a movers block, footer notes, `is_weekly_degraded` |
 | E ✅ | `weekly_analyst.py`: weekly prompt (6 sections, ~700 words), gates 150–1,000, deterministic fallback, own model settings, Markdown stripped; `analyst.call_claude` / `check_analysis_quality` take per-call settings and report refusals |
-| F | Integration: weekly workflow file, `DRY_RUN`, real chat, manual dispatch, tuning |
+| F ✅ | `weekly_main.py` (fetch, format, analyse, send, exit code; reuses `send_analysis_report` / `decide_exit_code`; refuses `DRY_RUN` inside Actions); inert manual workflow; local dry run + first real send |
 | G | User decides: replace the daily bot / run both / abandon → merge to `main` or not |
 
 ### Stage D decisions (2026-09-24)
@@ -217,9 +224,13 @@ Each stage gets an overview and a user decision before any code.
   - The fixed prompt has **not yet been seen live**; check it in Stage F's `DRY_RUN`.
 - The prompt gets breadth ("X of N up over 1W / 1M / 3M") computed in code, the movers and the footer notes. The HYG price-only caveat is spelled out.
 
-### Open questions for Stage F
+### Open questions for Stage G
 
-1. Stage F schedule: yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run would get Friday's.
+1. **Outcome:** replace the daily bot, run both, or abandon. Any merge to `main` goes through a PR.
+2. **Workflow on `main`:** needed for both the Run button and any schedule. GitHub runs schedules only from the default branch.
+3. **Schedule timing:** yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run (e.g. Sunday or Monday KST) would get Friday's. VIX from Cboe can lag too, but it falls back to Yahoo.
+4. **First GitHub run:** confirm the `MASSIVE_API_KEY` secret works (a 403 would show as `MassiveAuthError` and a degraded report), and that Yahoo answers from GitHub's runners.
+5. **Model:** the user may move `WEEKLY_ANTHROPIC_MODEL` to a larger model. Offer server-side refusal `fallbacks` then.
 
 ## Git workflow
 

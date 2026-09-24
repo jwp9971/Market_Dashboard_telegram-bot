@@ -146,6 +146,16 @@ its own model settings, separate from the daily ones:
 - `WEEKLY_ANTHROPIC_MODEL` (default `claude-sonnet-5`)
 - `WEEKLY_ANTHROPIC_EFFORT` (default `high`)
 
+To run the weekly report locally:
+
+```powershell
+$env:DRY_RUN=1; python src/weekly_main.py    # prints both messages, sends nothing
+Remove-Item Env:DRY_RUN; python src/weekly_main.py   # sends both messages to Telegram
+```
+
+The weekly workflow (`.github/workflows/weekly-commentary.yml`) is manual
+only. It refuses `DRY_RUN`, because Actions logs are public.
+
 Switching to a larger model is only a change to that setting. The note ends
 with a line naming the model that wrote it. If Claude declines, fails or is
 unavailable, a deterministic fallback note is sent with a ⚠️ warning
