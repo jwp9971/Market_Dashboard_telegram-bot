@@ -234,9 +234,16 @@ def test_the_snapshot_has_every_row_and_stays_within_budget(offline_sources):
     assert offline_sources["yahoo"] == ["DX-Y.NYB"]          # no VIX fallback needed
 
 
-def test_notes_name_contracts_price_only_and_early_values(offline_sources):
+def test_the_snapshot_notes_only_source_facts(offline_sources):
     notes = weekly_snapshot.get_weekly_snapshot(now=NOW, client=full_fake())["notes"]
-    joined = "\n".join(notes)
+    assert notes == ["Commodities: official settlement of the most-traded nearby "
+                     "contract (CLV6, GCZ6, HGZ6)"]
+
+
+def test_the_footer_built_from_a_collected_snapshot(offline_sources):
+    import weekly_dashboard
+    snap = weekly_snapshot.get_weekly_snapshot(now=NOW, client=full_fake())
+    joined = "\n".join(weekly_dashboard.weekly_data_notes(snap))
     assert "CLV6, GCZ6, HGZ6" in joined
     assert "price-only" in joined
     assert "HY OAS" in joined and "10Y" in joined          # dated Thursday

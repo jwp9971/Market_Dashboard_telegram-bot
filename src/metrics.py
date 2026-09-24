@@ -150,27 +150,43 @@ class Metric:
             return f"{self.value:,.1f}"
         return f"{self.value:,.2f}"
 
-    def format_changes(self) -> str:
-        if not self.tracks_changes:
-            return ""
+    def format_change(self, horizon: str) -> Optional[str]:
+        """One change as shown, e.g. '▲0.36%' or '▼0.02pts'; None if absent."""
+        change = self.change(horizon)
+        if change is None:
+            return None
         suffix = "%" if self.change_kind == CHANGE_PCT else "pts"
-        parts = []
+        # Judge direction on the value actually displayed: a change that
+        # rounds to 0.00 is flat, and "up zero" reads as a mistake.
+        shown = round(change, 2)
+        if shown == 0:
+            return f"{abs(shown):.2f}{suffix}"
+        arrow = UP if shown > 0 else DOWN
+        return f"{arrow}{abs(shown):.2f}{suffix}"
+
+    def _change_parts(self, template):
         headline = self.horizons[0][0]
-        for name, attribute in self.horizons:
-            change = getattr(self, attribute)
-            if change is None:
+        parts = []
+        for name, _ in self.horizons:
+            shown = self.format_change(name)
+            if shown is None:
                 if name == headline:
                     parts.append(f"{name} N/A")
                 continue
-            # Judge direction on the value actually displayed: a change that
-            # rounds to 0.00 is flat, and "up zero" reads as a mistake.
-            shown = round(change, 2)
-            if shown == 0:
-                parts.append(f"{abs(shown):.2f}{suffix} {name}")
-            else:
-                arrow = UP if shown > 0 else DOWN
-                parts.append(f"{arrow}{abs(shown):.2f}{suffix} {name}")
-        return " | ".join(parts)
+            parts.append(template.format(change=shown, name=name))
+        return parts
+
+    def format_changes(self) -> str:
+        """'▲0.05pts D/D | ▼0.20pts 1W'"""
+        if not self.tracks_changes:
+            return ""
+        return " | ".join(self._change_parts("{change} {name}"))
+
+    def format_changes_compact(self) -> str:
+        """'1W ▲0.36% · 1M ▼5.46% · 3M ▲2.70%' -- name first, for the weekly rows."""
+        if not self.tracks_changes:
+            return ""
+        return " · ".join(self._change_parts("{name} {change}"))
 
     def format_as_of(self) -> str:
         if not self.as_of:
@@ -196,6 +212,24 @@ class Metric:
         """'S&P 500 (SPY): $612.40 (▲0.42% D/D)'"""
         name = f"{self.label} ({self.symbol})" if self.symbol else self.label
         return f"{name}: {self.render()}"
+
+    def render_block(self) -> str:
+        """
+        Two lines for the weekly snapshot, easier to scan on a phone:
+            'S&P 500 (SPY)  $612.40'
+            '   1W ▼0.34% · 1M ▼0.53% · 3M ▲2.00%'
+        The second line is left out when the record carries no changes.
+        """
+        name = f"{self.label} ({self.symbol})" if self.symbol else self.label
+        if self.error:
+            return f"{name}  N/A ({self.error})"
+        if self.value is None:
+            return f"{name}  N/A"
+        head = f"{name}  {self.format_value()}"
+        if self.stale:
+            head += f"  ⚠ STALE, as of {self.format_as_of()}"
+        changes = self.format_changes_compact()
+        return f"{head}\n   {changes}" if changes else head
 
 
 def missing(key, label, source="", symbol="", error=None, **kwargs) -> Metric:
