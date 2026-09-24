@@ -1,8 +1,10 @@
 name: Daily Market Dashboard
 
+# Manual only since 2026-09-24: the weekly report (weekly-commentary.yml)
+# replaced this as the scheduled bot. To bring the daily schedule back, add
+#   schedule:
+#     - cron: '0 23 * * 0-4'
 on:
-  schedule:
-    - cron: '0 23 * * 0-4'
   workflow_dispatch: {}
 
 permissions:

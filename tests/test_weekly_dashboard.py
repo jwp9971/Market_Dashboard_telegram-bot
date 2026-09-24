@@ -35,7 +35,7 @@ def weekly(key, label, rows, unit=UNIT_USD, kind=CHANGE_PCT, symbol=""):
 
 def make_snapshot():
     macro = {
-        "VIX": weekly("VIX", "VIX", series(14.81, 15.84, 15.13, 16.78), UNIT_INDEX),
+        "VIX": weekly("VIX", "VIX", series(18.0, 20.0, 19.0, 21.0), UNIT_INDEX),
         "WTI": weekly("WTI", "WTI Crude", series(70.0, 69.0, 65.0, 60.0), symbol="CLX6"),
         "Gold": weekly("Gold", "Gold", series(2200.0, 2000.0, 2100.0, 1900.0), symbol="GCZ6"),
         "Copper": weekly("Copper", "Copper", series(4.4, 4.3, 4.2, 4.1), symbol="HGZ6"),

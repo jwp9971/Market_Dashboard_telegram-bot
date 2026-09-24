@@ -55,10 +55,14 @@ def test_every_required_env_var_is_documented():
 
 
 def test_the_schedule_matches_the_workflow():
-    workflow = (ROOT / ".github/workflows/daily-dashboard.yml").read_text()
-    cron = re.search(r"cron:\s*'([^']+)'", workflow).group(1)
-    assert cron == "0 23 * * 0-4"
+    """Since 2026-09-24 the weekly report is the scheduled bot; the daily one
+    is manual only."""
+    weekly = (ROOT / ".github/workflows/weekly-commentary.yml").read_text(encoding="utf-8")
+    cron = re.search(r"^\s*- cron:\s*'([^']+)'", weekly, re.MULTILINE).group(1)
+    assert cron == "0 3 * * 6"
     assert cron in README
+    daily = (ROOT / ".github/workflows/daily-dashboard.yml").read_text(encoding="utf-8")
+    assert not re.search(r"^\s*- cron:", daily, re.MULTILINE)
 
 
 def test_exit_codes_are_documented():

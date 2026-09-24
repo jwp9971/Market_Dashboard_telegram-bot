@@ -63,7 +63,14 @@ def run_weekly_report(now=None):
 
 
 def main():
-    exit_code, _ = run_weekly_report()
+    try:
+        exit_code, _ = run_weekly_report()
+    except Exception as e:
+        # Anything unexpected: print the type only. An exception's message or
+        # a traceback can quote a value, and the Actions log is public to
+        # anyone the repository is shared with.
+        print(f"Weekly report crashed: {type(e).__name__}")
+        exit_code = EXIT_FAILED
     label = {EXIT_OK: "OK", EXIT_FAILED: "FAILED", EXIT_DEGRADED: "DEGRADED"}.get(exit_code, "UNKNOWN")
     print(f"Run status: {label} (exit {exit_code})")
     return exit_code

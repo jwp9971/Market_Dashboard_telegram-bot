@@ -6,6 +6,11 @@ note grounded only in that data, and delivers both the raw snapshot and the
 commentary to Telegram. It runs on a GitHub Actions schedule with no server
 and no database.
 
+**Since 2026-09-24 the scheduled report is the weekly commentary.** Every
+Saturday it covers the Monday–Friday week just ended, measured on week-end
+closes (1W / 1M / 3M), and runs from `src/weekly_main.py`. The daily report
+described below is still in the code and can be run by hand.
+
 Built as a self-directed learning project with no prior programming
 background, through iterative AI-assisted development.
 
@@ -188,13 +193,19 @@ python -m pytest -q              # no network, no API keys, no messages
 
 ## Schedule
 
-`0 23 * * 0-4` UTC — **08:00 Korea time, Monday to Friday**, covering the
-previous US session.
+**Weekly report:** `0 3 * * 6` UTC, which is **12:00 Korea time every
+Saturday**, covering the Monday–Friday week just ended. It runs six hours
+after Friday's close so that Friday's ETF, futures and VIX data have been
+published. Rates and credit still show Thursday, because those sources run
+one business day behind; the report's footer says so.
+
+**Daily report:** manual only (the Run workflow button). Its old schedule was
+`0 23 * * 0-4` UTC (08:00 Korea time, Monday to Friday) and can be restored
+in `.github/workflows/daily-dashboard.yml`.
 
 GitHub's scheduled workflows are best-effort and are frequently delayed;
-observed runs have started 1–2 hours late. Schedules on public repositories
-are also disabled after 60 days without repository activity. There is no
-delivery-time guarantee.
+observed runs have started 1–2 hours late. There is no delivery-time
+guarantee.
 
 ---
 
