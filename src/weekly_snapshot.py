@@ -23,7 +23,7 @@ import massive
 from massive_client import MassiveClient
 from metrics import (CHANGE_LEVEL, CHANGE_PCT, UNIT_INDEX, UNIT_PERCENT,
                      WEEKLY_HORIZONS, missing)
-from sectors import ETF_GROUPS, SECTOR_GROUP_KEYS, all_metrics
+from sectors import ETF_GROUPS, SECTOR_GROUP_KEYS
 from weeks import last_completed_week, week_end_close, week_label, weekly_metric
 
 # ETFs 4-6, yields 1, futures up to 15: a run needing more than this is a bug.
@@ -80,22 +80,16 @@ def _collect(macro_rows, keys, source, collector):
         macro_rows.update(_failed(keys, source, exc))
 
 
-def build_notes(macro_rows, etfs, friday, contracts):
-    notes = []
-    if contracts:
-        notes.append("Commodities: official settlement of the most-traded nearby contract ("
-                     + ", ".join(contracts) + ")")
-    notes.append("ETF changes are price-only: Massive closes are split- but not dividend-adjusted")
-
-    rows = list(macro_rows.values()) + all_metrics(etfs)
-    early = [m.key for m in rows if m.value is not None and m.as_of and m.as_of < friday.isoformat()]
-    if early:
-        notes.append("Last value before Friday (holiday, or the source runs a day behind): "
-                     + ", ".join(early))
-    absent = [m.key for m in rows if m.value is None]
-    if absent:
-        notes.append("Missing this week: " + ", ".join(absent))
-    return notes
+def source_notes(contracts):
+    """
+    Where numbers came from -- facts only the collection knows. Notes derived
+    from the rows themselves (missing, dated early, ...) are written by
+    weekly_dashboard, as dashboard.py does for the daily report.
+    """
+    if not contracts:
+        return []
+    return ["Commodities: official settlement of the most-traded nearby contract ("
+            + ", ".join(contracts) + ")"]
 
 
 def get_weekly_snapshot(now=None, client=None):
@@ -132,7 +126,7 @@ def get_weekly_snapshot(now=None, client=None):
     macro_rows = {key: rows[key] for key in MACRO_ORDER if key in rows}
     contracts = [m.symbol for key, m in macro_rows.items()
                  if key in massive.FUTURES and m.value is not None]
-    notes = notes + build_notes(macro_rows, etfs, friday, contracts)
+    notes = notes + source_notes(contracts)
     print(f"Weekly snapshot: {client.calls_made} live Massive calls "
           f"{client.calls_by_class}, {client.cache_hits} cache hits")
     return {"week": (monday, friday), "label": week_label(friday), "macro": macro_rows,

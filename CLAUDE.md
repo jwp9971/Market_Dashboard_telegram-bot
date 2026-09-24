@@ -84,7 +84,12 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 **Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (created 2026-09-24 from `main`) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
 
-**Status:** Stages A–C are done. `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. Its values were cross-checked against Cboe and Yahoo on 2026-09-24. `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets; the secret isn't used by any workflow until Stage F. Next: Stage D.
+**Status:** Stages A–D are done.
+- `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. The values were cross-checked against Cboe and Yahoo on 2026-09-24.
+- `python src/weekly_dashboard.py` previews the real Telegram text locally: ~3,000 characters, one message.
+- `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets. No workflow uses the secret until Stage F.
+
+Next: Stage E.
 
 ### Massive data terms — hard rules
 
@@ -180,16 +185,29 @@ Each stage gets an overview and a user decision before any code.
 | A ✅ | Local `venv` (Python 3.14); `weekly-commentary` from `main`; `cache/` gitignored; decisions recorded; user confirms `MASSIVE_API_KEY` in GitHub Secrets |
 | B ✅ | Massive client foundation: per-class limiter (injectable clock), retry/backoff, raw cache, budget guard, probe script, fake-clock tests, live probe |
 | C ✅ | `weeks.py`, `massive.py`, `cboe.py`, `weekly_snapshot.py`; `macro.get_fred_observations` / `get_yfinance_closes` (the daily `get_fred_series` now wraps the first, same output); `Metric.quarter_change` + `horizons` |
-| D | Weekly snapshot + dashboard sections, footer notes for supplementary sources, delivery layout |
+| D ✅ | `weekly_dashboard.py`: two-line rows (`Metric.render_block`), a movers block, footer notes, `is_weekly_degraded` |
 | E | Weekly prompt and fallback rewritten for the weekly framing |
 | F | Integration: weekly workflow file, `DRY_RUN`, real chat, manual dispatch, tuning |
 | G | User decides: replace the daily bot / run both / abandon → merge to `main` or not |
 
-### Open questions for Stage D
+### Stage D decisions (2026-09-24)
 
-1. Delivery shape: the same two Telegram messages, or a new weekly layout.
-2. Which snapshot notes (price-only ETFs, contracts used, values dated before Friday, VIX fallback, missing rows) go in the footer, and which conditions count as **degraded**.
-3. Stage F schedule: yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run would get Friday's.
+- **Delivery: two messages, like the daily bot.** Message 1 is the snapshot (`format_weekly_dashboard`), message 2 is Claude's note. Reuse `telegram_bot.send_analysis_report` in Stage F.
+- **Rows take two lines:** `• Name (SYM)  value`, then `   1W ▲x · 1M ▼y · 3M ▲z`, built by `Metric.render_block()` / `format_changes_compact()`. A row with no changes (the Gold/Copper ratio) takes one line.
+- **Movers block:** the top 3 and bottom 3 ETFs by 1W, from usable rows only.
+- **Footer:**
+  - source facts from the snapshot: contracts used, VIX fallback
+  - ETFs are price-only
+  - values dated before Friday
+  - 3M unavailable (under 13 weeks of history)
+  - missing rows
+  - The derived notes live in `weekly_dashboard.weekly_data_notes`; `weekly_snapshot.source_notes` supplies only the source facts.
+- **Degraded** (`is_weekly_degraded`) when VIX, HY OAS or 10Y is unusable, or every ETF is. Everything else is a note only.
+
+### Open questions for Stages E/F
+
+1. Stage E: the weekly prompt's required sections and word limits, and the fallback note.
+2. Stage F schedule: yields and OAS reach their sources about a day late, so an early-Saturday KST run shows Thursday's values for them (noted in the footer). A later run would get Friday's.
 
 ## Git workflow
 

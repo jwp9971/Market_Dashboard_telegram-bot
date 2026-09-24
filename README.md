@@ -132,6 +132,12 @@ weeks back and 3M with thirteen. ETF changes are price-only (Massive does not
 adjust for dividends). Futures use the official settlement of the most-traded
 nearby contract.
 
+The weekly snapshot (`src/weekly_dashboard.py`) shows each row on two lines,
+the name and value first and then 1W / 1M / 3M underneath. It opens with the
+week's three best and three worst ETFs. A week is **degraded** when VIX, HY
+OAS or the 10Y is unusable, or every ETF is. Single gaps, values dated before
+Friday and the VIX fallback are footer notes only.
+
 ### Install and run
 
 ```bash
@@ -243,6 +249,7 @@ src/
   cboe.py               Weekly: VIX from Cboe's public history file
   weeks.py              Weekly: Mon-Fri week-end closes and 1W / 1M / 3M changes
   weekly_snapshot.py    Weekly: assembles every weekly number (local print only)
+  weekly_dashboard.py   Weekly: snapshot text, movers, footer notes, degraded rule
 scripts/
   massive_probe.py      Manual live check of the Massive API (never run in Actions)
 tests/                  Network-free test suite
