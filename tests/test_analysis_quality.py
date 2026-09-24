@@ -135,3 +135,50 @@ def test_truncation_is_still_caught_if_it_somehow_happens(monkeypatch):
     _fake_anthropic(monkeypatch, GOOD_NOTE, stop_reason="max_tokens")
     result = analyst.analyze_market({}, {})
     assert result["source"] == "claude_incomplete"
+
+
+# --- refusals and per-call settings (weekly commentary, Stage E) -------------
+
+def test_a_refusal_is_reported_not_silently_dropped(monkeypatch):
+    """Larger models can decline with HTTP 200 and stop_reason="refusal"; the
+    fallback must then carry the reason instead of appearing unexplained."""
+    class _Refusal(_Response):
+        def __init__(self):
+            super().__init__("")
+            self.content = []
+            self.stop_reason = "refusal"
+            self.stop_details = type("D", (), {"category": "cyber"})()
+
+    class _Client:
+        def __init__(self, api_key=None):
+            self.messages = type("M", (), {"create": lambda self, **k: _Refusal()})()
+
+    monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
+    monkeypatch.setattr(analyst, "ANTHROPIC_API_KEY", "test-key")
+    result = analyst.call_claude("prompt")
+    assert result["text"] is None
+    assert result["error"] == "Claude declined (cyber)"
+    market = analyst.analyze_market({}, {})
+    assert market["source"] == "fallback"
+    assert market["warnings"] == ["Claude unavailable: Claude declined (cyber)"]
+
+
+def test_call_settings_can_be_overridden_per_call(monkeypatch):
+    captured = {}
+
+    class _Client:
+        def __init__(self, api_key=None):
+            self.messages = type("M", (), {
+                "create": lambda self, **k: captured.update(k) or _Response(GOOD_NOTE)})()
+
+    monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
+    monkeypatch.setattr(analyst, "ANTHROPIC_API_KEY", "test-key")
+
+    analyst.call_claude("p")
+    assert (captured["model"], captured["output_config"], captured["system"]) == (
+        analyst.ANTHROPIC_MODEL, {"effort": analyst.ANTHROPIC_EFFORT}, analyst.SYSTEM_PROMPT)
+
+    analyst.call_claude("p", system="S", model="claude-opus-5", effort="xhigh")
+    assert (captured["model"], captured["output_config"], captured["system"]) == (
+        "claude-opus-5", {"effort": "xhigh"}, "S")
+    assert captured["thinking"] == {"type": "adaptive"}
