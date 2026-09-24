@@ -6,3 +6,6 @@ __pycache__/
 data/*.db
 .pytest_cache/
 .coverage
+
+# Massive API response cache (weekly-commentary); never committed
+cache/
