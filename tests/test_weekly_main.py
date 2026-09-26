@@ -117,7 +117,7 @@ def test_an_unexpected_crash_prints_only_its_type(run, monkeypatch, capsys):
 def test_the_workflow_runs_saturday_noon_kst_or_by_hand():
     text = "\n".join(_workflow_lines())
     assert "workflow_dispatch" in text
-    assert text.count("cron:") == 1 and "cron: '0 3 * * 6'" in text
+    assert text.count("cron:") == 1 and "cron: '17 3 * * 6'" in text
     assert "push:" not in text and "pull_request" not in text
 
 
