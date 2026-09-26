@@ -1,17 +1,20 @@
 name: Weekly Commentary
 
-# Saturday 03:00 UTC = 12:00 KST, six hours after Friday's close: Cboe had
-# updated its VIX file by 01:51 GMT the day after a session, and Massive had
-# the previous session by 05:00 UTC. Rates and credit still show Thursday
-# (FRED / Economy API run a business day late). GitHub may start it 1-2 h late.
+# Saturday 03:17 UTC = 12:17 KST, about six hours after Friday's close: Cboe
+# had updated its VIX file by 01:51 GMT the day after a session, and Massive
+# had the previous session by 05:00 UTC. Rates and credit still show Thursday
+# (FRED / Economy API run a business day late). Minute 17, not 0: GitHub's
+# scheduler is busiest on the hour, and the first scheduled run (0 3, on
+# 2026-09-26) had not started three hours later. Runs can still start late.
 # The Run button (workflow_dispatch) works from the default branch.
 #
-# Massive's terms forbid publishing its data and this repository's logs are
-# public: no DRY_RUN here, no artifacts, no actions/cache. The job fetches
-# fresh each run and logs only statuses and counts.
+# Massive's terms forbid publishing its data. The repository is private, but
+# its logs are still visible to anyone it is shared with: no DRY_RUN here, no
+# artifacts, no actions/cache. The job fetches fresh each run and logs only
+# statuses and counts.
 on:
   schedule:
-    - cron: '0 3 * * 6'
+    - cron: '17 3 * * 6'
   workflow_dispatch: {}
 
 permissions:
@@ -27,10 +30,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -44,6 +47,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          # Print each log line as it happens, not all at exit: a run killed
+          # by the timeout would otherwise leave an empty log.
+          PYTHONUNBUFFERED: '1'
           # Repository variables (Settings > Secrets and variables > Actions >
           # Variables). Empty means the code defaults: claude-sonnet-5 / high.
           WEEKLY_ANTHROPIC_MODEL: ${{ vars.WEEKLY_ANTHROPIC_MODEL }}

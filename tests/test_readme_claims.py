@@ -59,7 +59,7 @@ def test_the_schedule_matches_the_workflow():
     is manual only."""
     weekly = (ROOT / ".github/workflows/weekly-commentary.yml").read_text(encoding="utf-8")
     cron = re.search(r"^\s*- cron:\s*'([^']+)'", weekly, re.MULTILINE).group(1)
-    assert cron == "0 3 * * 6"
+    assert cron == "17 3 * * 6"
     assert cron in README
     daily = (ROOT / ".github/workflows/daily-dashboard.yml").read_text(encoding="utf-8")
     assert not re.search(r"^\s*- cron:", daily, re.MULTILINE)

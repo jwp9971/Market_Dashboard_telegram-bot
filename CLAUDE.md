@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Two sessions, two roles
 
-- **Local VS Code session** — builds the `weekly-commentary` branch, runs code and live API calls on the user's laptop.
+- **Local VS Code session** — builds each change on its own branch off `main`, runs code and live API calls on the user's laptop.
 - **Web session (claude.ai/code)** — GitHub integration only: reviewing and refining PRs, merging when the user says so.
 - Never have both editing the same branch at once. `git pull` before starting work.
 
@@ -40,7 +40,7 @@ python scripts/massive_probe.py       # weekly branch: live Massive check (~8 fr
 
 ## Architecture (daily bot)
 
-**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, `0 3 * * 6` UTC = Saturday 12:00 KST; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` keeps its Run button, and its old cron `0 23 * * 0-4` is noted in a comment there. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
+**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, `17 3 * * 6` UTC = Saturday 12:17 KST; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` keeps its Run button, and its old cron `0 23 * * 0-4` is noted in a comment there. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
 
 Data flow:
 
@@ -82,22 +82,24 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 ## Weekly Commentary — the active project
 
-**Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Developed on a long-lived experimental branch **`weekly-commentary`** (created 2026-09-24 from `main`) so `main` and the live daily bot stay untouched. The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
+**Goal:** a weekly macro/market commentary built on **Massive API (free Basic tier)** plus a small set of supplementary sources, delivered by the same Telegram bot. Built on the branch **`weekly-commentary`** (2026-09-24, stages A–G) and merged to `main` the same day (PR #14); new work now branches off `main` (see Git workflow). The user will add more data and content ideas later — build the foundation, don't pre-build speculative features.
 
-**Status:** Stages A–G are done on the branch. The weekly report replaces the daily bot once `weekly-commentary` is merged to `main` (by the user, after making the repo private).
+**Status:** Stages A–G are done and **live on `main`** (PR #14, 2026-09-24). The repo is private. The weekly report is the scheduled bot; the daily one is manual only.
 - `python src/weekly_snapshot.py` collects every weekly number live: 18 Massive calls, ~2 min. The values were cross-checked against Cboe and Yahoo on 2026-09-24.
 - `python src/weekly_dashboard.py` previews the real Telegram text locally: ~3,000 characters, one message.
 - `python src/weekly_analyst.py` writes Claude's note locally, costing one Claude call. The live test on 2026-09-24 used Sonnet 5: 3.6k input and 3.4k output tokens (≈ $0.04), 683 words, `end_turn`, and every number checked matched the snapshot.
 - `python src/weekly_main.py` runs the whole weekly job. On 2026-09-24:
   - A `DRY_RUN` gave exit 0; message 1 was 2,999 characters and message 2 was 3,833 (one part each); no Markdown.
   - The **first real send reached the user's Telegram chat**: exit 0, `claude-sonnet-5`, 3.7k input and 3.7k output tokens.
-- `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets. No GitHub run has used it yet, because the workflow can't run until it's on `main`.
+- `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets.
+- **First GitHub run** (manual, 2026-09-24, run #1): exit 0, 18 Massive calls (two 60 s rate-limit waits, ~3 min), `claude-sonnet-5` `end_turn`, both messages sent. The log showed statuses and counts only. Whether Yahoo (DXY) answered from the runner isn't visible in the log, only in the message.
+- **First scheduled run** (`0 3 * * 6`, 2026-09-26) had not started by 06:07 UTC although the workflow was `active`, so GitHub most likely delayed or dropped it; the user planned to run it by hand. The cron moved to `17 3 * * 6` to avoid the top of the hour.
 
-Next: the first GitHub run after the merge (see Stage G decisions). After that, new data and content ideas from the user.
+Next: new data and content ideas from the user, one branch and PR per change.
 
 ### Massive data terms — hard rules
 
-Massive's market-data terms limit use to **personal, non-commercial** use. They forbid publishing, displaying or transferring the data to third parties, and derived indices need a licence. The repo **and its Actions logs** are public. So:
+Massive's market-data terms limit use to **personal, non-commercial** use. They forbid publishing, displaying or transferring the data to third parties, and derived indices need a licence. The repo was public until Stage G and is private now; its Actions logs are still visible to anyone it is shared with. So:
 
 - **Never commit Massive data.** Test fixtures in `tests/fixtures/massive/` are **synthetic**: the documented shape with made-up numbers. Real responses live only in the gitignored `cache/`.
 - **Never print Massive values in Actions.** Log only the endpoint, status, counts and dates. No `DRY_RUN` in Actions. Don't put Massive data in artifacts or the Actions cache: the weekly job fetches fresh on each run (Stage F).
@@ -170,9 +172,9 @@ Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, fundi
   - No observation inside the target week means the value is **missing** ("no data in the week of …"), never last week's number.
   - A 1M/3M with no prior close is simply left out. AIHY (listed 07-21) and NCLD (listed 08-06) have no 3M yet.
 - **Weekly workflow (`.github/workflows/weekly-commentary.yml`, Stage F):**
-  - `workflow_dispatch` only. It uses the secrets `TELEGRAM_*`, `ANTHROPIC_API_KEY`, `FRED_API_KEY` and `MASSIVE_API_KEY`, and takes `WEEKLY_ANTHROPIC_MODEL` / `_EFFORT` from repository **variables** (`vars.*`; empty means the code defaults).
+  - Stage F: `workflow_dispatch` only; Stage G added the Saturday cron. It uses the secrets `TELEGRAM_*`, `ANTHROPIC_API_KEY`, `FRED_API_KEY` and `MASSIVE_API_KEY`, and takes `WEEKLY_ANTHROPIC_MODEL` / `_EFFORT` from repository **variables** (`vars.*`; empty means the code defaults).
   - It has no `DRY_RUN`, no artifacts and no `actions/cache`. `tests/test_weekly_main.py` enforces all of this.
-  - GitHub shows the "Run workflow" button only once the file is on `main`. **The user chose local runs only until Stage G**, so the file is inert on the branch.
+  - `PYTHONUNBUFFERED=1`, so log lines appear as they happen (run #1's lines were all stamped at exit).
   - Don't modify `daily-dashboard.yml`.
 - **Telegram: the real chat**, no test chat (the daily bot is inactive, so no clash). `DRY_RUN=1` is the safety switch while developing. So `telegram_bot.py` needs no chat-override change.
 
@@ -237,13 +239,13 @@ Each stage gets an overview and a user decision before any code.
 ### Stage G decisions (2026-09-24)
 
 - **Weekly replaces daily.**
-  - `weekly-commentary.yml` runs on `cron: '0 3 * * 6'` = **Saturday 12:00 KST** and keeps its Run button.
+  - `weekly-commentary.yml` runs on `cron: '17 3 * * 6'` = **Saturday 12:17 KST** (was `0 3` until 2026-09-26, see Status) and keeps its Run button.
   - `daily-dashboard.yml` lost only its `schedule:`. It is manual-only now, and a comment there shows the old cron for restoring it. Tests enforce both (`test_weekly_main.py`, `test_readme_claims.py`).
 - **Why that hour:** it is six hours after Friday's close. Cboe updated its VIX file at 01:51 GMT the day after a session, and Massive had the previous session by 05:00 UTC. Rates and credit still show Thursday; the footer says so. GitHub may start runs 1–2 h late.
 - **The repository goes private** (the user does this in Settings, *before* the merge to `main`), so Actions logs are no longer public. The no-values-in-logs rules still apply.
 - **`weekly_main.main()` catches any unexpected exception and prints only its type.** An exception message or traceback can quote a value.
 - The test fixtures' real Cboe VIX numbers were replaced with invented ones.
-- **Remaining after merge:** the first GitHub run (Run workflow on `main`). Check for `MassiveAuthError` (a wrong secret), that Yahoo (DXY, and VIX fallback) answers from GitHub's runners, and the "delivered (OK)" summary.
+- **After merge:** the first GitHub run passed on 2026-09-24 (see Status).
 - **Model:** the user may later set the repository variable `WEEKLY_ANTHROPIC_MODEL` to a larger model. Offer the server-side refusal `fallbacks` then.
 
 ## Git workflow
@@ -251,7 +253,8 @@ Each stage gets an overview and a user decision before any code.
 One local folder; switch branches in place (VS Code shows the current branch bottom-left).
 
 - `main` mirrors the live bot. **Never commit to it directly** — it changes only through merged PRs, then `git pull`.
-- `weekly-commentary` holds the experiment. **Agreed:** one short-lived branch per stage (`weekly/stage-b`, …) off `weekly-commentary` → PR into `weekly-commentary` (base must **not** be `main`; CI runs; the web session can review) → the user merges → `git checkout weekly-commentary; git pull`.
+- **Agreed (2026-09-26):** one short-lived branch per change off `main` → PR into `main` → wait for the green **Tests** check on the PR (nothing enforces this: `main` has no branch protection, and GitHub Free doesn't offer it for private repos) → the user merges → delete the branch → `git checkout main; git pull`.
+- `weekly-commentary` and `weekly/stage-*` were the Stage A–G branches; all are merged and can be deleted.
 - Commit or stash before switching branches. The shared `.env` and `venv` stay put across switches; after switching, `pip install -r requirements.txt` if dependencies differ.
 - Switching branches locally cannot affect production — the live bot runs from GitHub `main` via Actions.
 
