@@ -61,11 +61,12 @@ class _Adjustment:
 _stub("alpaca.data.enums", DataFeed=_DataFeed, Adjustment=_Adjustment)
 
 # Never let a stray real credential reach a test run.
-for var in (
+CREDENTIALS = (
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY", "FRED_API_KEY", "ANTHROPIC_API_KEY",
     "MASSIVE_API_KEY",
-):
+)
+for var in CREDENTIALS:
     os.environ.pop(var, None)
 
 
@@ -82,8 +83,9 @@ def _no_network(monkeypatch):
     """
     def blocked(*args, **kwargs):
         raise AssertionError(
-            "test tried to reach the network -- patch the fetcher "
-            "(sectors.fetch_yahoo_frame / macro.get_yfinance_series) instead"
+            "test tried to reach the network -- patch the fetcher or client it "
+            "uses (sectors.fetch_yahoo_frame, macro.get_yfinance_series, "
+            "anthropic.Anthropic, telegram_bot.send_message) instead"
         )
 
     import requests
@@ -91,6 +93,23 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(yfinance, "download", blocked, raising=False)
     monkeypatch.setattr(yfinance, "Ticker", blocked, raising=False)
     monkeypatch.setattr(requests, "get", blocked, raising=False)
+
+    # On a laptop the source modules' load_dotenv() puts the real keys back
+    # (into os.environ and module constants) after the lines above removed
+    # them. Blank them again, and make the two outward clients raise, so a
+    # test missing a stub can neither spend a Claude call nor post to the
+    # chat. Tests that need a key or a client set their own, as before.
+    import analyst
+    import macro
+    import telegram_bot
+    for var in CREDENTIALS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(analyst, "ANTHROPIC_API_KEY", None)
+    monkeypatch.setattr(macro, "FRED_API_KEY", None)
+    monkeypatch.setattr(telegram_bot, "BOT_TOKEN", None)
+    monkeypatch.setattr(telegram_bot, "CHAT_ID", None)
+    monkeypatch.setattr(telegram_bot, "Bot", blocked)
+    monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", blocked, raising=False)
 
 
 # The instant every test sees as "now", unless it passes its own now/today.

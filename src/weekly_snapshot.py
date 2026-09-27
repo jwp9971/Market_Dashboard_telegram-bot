@@ -95,26 +95,35 @@ def source_notes(contracts):
 def get_weekly_snapshot(now=None, client=None):
     """
     {"week": (monday, friday), "label": str, "macro": {key: Metric},
-     "etfs": {group: [Metric]}, "notes": [str], "massive_calls": int}
+     "etfs": {group: [Metric]}, "notes": [str], "massive_calls": int,
+     "etf_gaps": ["3M", ...]}   # changes no ETF has, because a fetch failed
     """
     now = now or datetime.now(timezone.utc)
     monday, friday = last_completed_week(now)
-    client = client or MassiveClient(max_calls=WEEKLY_CALL_BUDGET)
-    notes, rows = [], {}
+    notes, rows, etf_gaps = [], {}, []
+
+    # Without a usable key the client can't be built. That costs the Massive
+    # rows only: VIX, the credit spreads and the dollar still go out.
+    massive_error = None
+    if client is None:
+        try:
+            client = MassiveClient(max_calls=WEEKLY_CALL_BUDGET)
+        except Exception as exc:
+            massive_error = exc
+
+    def via_massive(fetch):
+        def run():
+            if massive_error is not None:
+                raise massive_error
+            return fetch()
+        return run
 
     _collect(rows, ["VIX"], "cboe", lambda: {"VIX": vix_metric(friday, notes)})
-    _collect(rows, ["WTI", "Gold", "Copper", "Gold/Copper"], "massive",
-             lambda: massive.get_futures_metrics(client, friday))
-    _collect(rows, ["10Y", "2Y", "2s10s"], "massive",
-             lambda: massive.get_yield_metrics(client, friday))
-    _collect(rows, ["HY OAS"], "fred", lambda: {"HY OAS": fred_metric("HY OAS", "BAMLH0A0HYM2", friday)})
-    _collect(rows, ["IG OAS"], "fred", lambda: {"IG OAS": fred_metric("IG OAS", "BAMLC0A0CM", friday)})
-    _collect(rows, ["DXY"], "yahoo", lambda: {"DXY": weekly_metric(
-        "DXY", "Dollar Index", macro.get_yfinance_closes("DX-Y.NYB", YAHOO_PERIOD),
-        friday, UNIT_INDEX, CHANGE_PCT, source="yahoo")})
 
+    # ETFs go first among the Massive calls, so they are served before the
+    # call budget can run out on retries elsewhere.
     try:
-        etfs = massive.get_etf_snapshot(client, friday, now)
+        etfs = via_massive(lambda: massive.get_etf_snapshot(client, friday, now, etf_gaps))()
     except Exception as exc:
         reason = f"massive failed: {type(exc).__name__}"
         print(reason)
@@ -122,15 +131,33 @@ def get_weekly_snapshot(now=None, client=None):
                                 error=reason, horizons=WEEKLY_HORIZONS)
                         for symbol, label in ETF_GROUPS[group].items()]
                 for group in SECTOR_GROUP_KEYS}
+    if etf_gaps:
+        notes.append(f"ETFs: {', '.join(etf_gaps)} left out for every ETF, "
+                     "because an earlier week's closes could not be fetched")
+
+    _collect(rows, ["WTI", "Gold", "Copper", "Gold/Copper"], "massive",
+             via_massive(lambda: massive.get_futures_metrics(client, friday)))
+    _collect(rows, ["10Y", "2Y", "2s10s"], "massive",
+             via_massive(lambda: massive.get_yield_metrics(client, friday)))
+    _collect(rows, ["HY OAS"], "fred", lambda: {"HY OAS": fred_metric("HY OAS", "BAMLH0A0HYM2", friday)})
+    _collect(rows, ["IG OAS"], "fred", lambda: {"IG OAS": fred_metric("IG OAS", "BAMLC0A0CM", friday)})
+    _collect(rows, ["DXY"], "yahoo", lambda: {"DXY": weekly_metric(
+        "DXY", "Dollar Index", macro.get_yfinance_closes("DX-Y.NYB", YAHOO_PERIOD),
+        friday, UNIT_INDEX, CHANGE_PCT, source="yahoo")})
 
     macro_rows = {key: rows[key] for key in MACRO_ORDER if key in rows}
     contracts = [m.symbol for key, m in macro_rows.items()
                  if key in massive.FUTURES and m.value is not None]
     notes = notes + source_notes(contracts)
-    print(f"Weekly snapshot: {client.calls_made} live Massive calls "
-          f"{client.calls_by_class}, {client.cache_hits} cache hits")
+    if massive_error is not None:
+        print(f"Weekly snapshot: no Massive calls ({type(massive_error).__name__})")
+        calls = 0
+    else:
+        print(f"Weekly snapshot: {client.calls_made} live Massive calls "
+              f"{client.calls_by_class}, {client.cache_hits} cache hits")
+        calls = client.calls_made
     return {"week": (monday, friday), "label": week_label(friday), "macro": macro_rows,
-            "etfs": etfs, "notes": notes, "massive_calls": client.calls_made}
+            "etfs": etfs, "notes": notes, "massive_calls": calls, "etf_gaps": etf_gaps}
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(__file__))
 
 from metrics import (CHANGE_LEVEL, CHANGE_PCT, UNIT_PERCENT, UNIT_RATIO,
-                     UNIT_USD, WEEKLY_HORIZONS, Metric, last_expected_session)
+                     UNIT_USD, WEEKLY_HORIZONS, Metric, last_expected_session, missing)
 from sectors import ETF_GROUPS, SECTOR_GROUP_KEYS
 from weeks import MAX_WEEKS_BACK, WEEKS_BACK, normalise, week_of, weekly_metric
 
@@ -38,30 +38,47 @@ def grouped_daily_closes(client, day, now=None):
             if row.get("T") and row.get("c") is not None}
 
 
-def etf_week_end_series(client, friday, now=None):
+# The label of the change each earlier week feeds: {1: "1W", 4: "1M", 13: "3M"}.
+HORIZON_OF_WEEKS_BACK = {WEEKS_BACK[field]: label for label, field in WEEKLY_HORIZONS}
+
+
+def etf_week_end_series(client, friday, now=None, gaps=None):
     """
     {ticker: [(date, close), ...]} holding each needed week's last close.
 
     Only the weeks the changes use are fetched -- this week, 1, 4 and 13 back
     -- one grouped-daily call each, stepping back a day when a date had no
     session (a holiday Friday costs one more call).
+
+    This week's closes are required: if they fail, the error propagates. An
+    earlier week that fails only loses the change it feeds; its label ("3M")
+    is appended to `gaps` so the report can say why.
     """
     series = {}
     for weeks_back in sorted({0, *WEEKS_BACK.values()}):
         monday, day = week_of(friday, weeks_back)
-        while day >= monday:
-            closes = grouped_daily_closes(client, day, now)
-            if closes:
-                for ticker, close in closes.items():
-                    series.setdefault(ticker, []).append((day, close))
-                break
-            day -= timedelta(days=1)
+        try:
+            while day >= monday:
+                closes = grouped_daily_closes(client, day, now)
+                if closes:
+                    for ticker, close in closes.items():
+                        series.setdefault(ticker, []).append((day, close))
+                    break
+                day -= timedelta(days=1)
+        except Exception as exc:
+            if weeks_back == 0:
+                raise
+            label = HORIZON_OF_WEEKS_BACK[weeks_back]
+            print(f"Massive ETF closes {weeks_back} week(s) back failed: "
+                  f"{type(exc).__name__}; {label} is left out")
+            if gaps is not None:
+                gaps.append(label)
     return series
 
 
-def get_etf_snapshot(client, friday, now=None):
+def get_etf_snapshot(client, friday, now=None, gaps=None):
     """{group: [Metric]} in SECTOR_GROUP_KEYS order, like sectors.get_sector_snapshot."""
-    series = etf_week_end_series(client, friday, now)
+    series = etf_week_end_series(client, friday, now, gaps)
     return {
         group: [weekly_metric(symbol, label, series.get(symbol, []), friday,
                               UNIT_USD, CHANGE_PCT, source=SOURCE, symbol=symbol)
@@ -199,16 +216,26 @@ def get_futures_metrics(client, friday):
     """WTI, Gold, Copper and the Gold/Copper ratio, each from its chosen contract."""
     metrics = {}
     for key, (code, label) in FUTURES.items():
-        ticker, series = get_futures_series(client, code, friday)
+        # One product failing (after the client's retries) loses only its row.
+        try:
+            ticker, series = get_futures_series(client, code, friday)
+        except Exception as exc:
+            reason = f"massive failed: {type(exc).__name__}"
+            print(f"Massive futures {code}: {reason}")
+            metrics[key] = missing(key, label, source=SOURCE, symbol=code, error=reason,
+                                   horizons=WEEKLY_HORIZONS)
+            continue
         metrics[key] = weekly_metric(key, label, series, friday, UNIT_USD, CHANGE_PCT,
                                      source=SOURCE, symbol=ticker or code)
 
     gold, copper = metrics["Gold"], metrics["Copper"]
+    ratio = (round(gold.value / copper.value, 2)
+             if gold.value is not None and copper.value else None)
     metrics["Gold/Copper"] = Metric(
-        key="Gold/Copper", label="Gold/Copper Ratio",
-        value=(round(gold.value / copper.value, 2)
-               if gold.value is not None and copper.value else None),
+        key="Gold/Copper", label="Gold/Copper Ratio", value=ratio,
         unit=UNIT_RATIO, tracks_changes=False, horizons=WEEKLY_HORIZONS,
         as_of=gold.as_of or copper.as_of, source=SOURCE,
+        # A ratio that can't be computed says why, from whichever leg failed.
+        error=(gold.error or copper.error) if ratio is None else None,
     )
     return metrics

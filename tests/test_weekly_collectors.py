@@ -276,6 +276,64 @@ def test_one_failing_source_leaves_the_rest_standing(offline_sources):
     assert snap["macro"]["VIX"].value is not None
 
 
+def test_one_failing_futures_product_keeps_the_other_two():
+    def copper_breaks(path, params):
+        if params["ticker.any_of"].startswith("HG"):
+            raise MassiveBudgetExceeded("budget")
+        return contracts(path, params)
+    rows = massive.get_futures_metrics(full_fake(futures__v1__contracts=copper_breaks), FRIDAY)
+    assert rows["WTI"].value is not None and rows["Gold"].value is not None
+    assert rows["Copper"].value is None
+    assert rows["Copper"].error == "massive failed: MassiveBudgetExceeded"
+    assert rows["Gold/Copper"].value is None
+    assert rows["Gold/Copper"].error == "massive failed: MassiveBudgetExceeded"
+
+
+def _grouped_failing_on(bad_day):
+    def handler(path, params):
+        if path.endswith(bad_day):
+            raise MassiveBudgetExceeded("budget")
+        return grouped(path, params)
+    return handler
+
+
+def test_a_failed_earlier_week_only_loses_its_change(offline_sources, capsys):
+    """Before, one failed 13-weeks-back call blanked all 22 ETFs."""
+    import weekly_dashboard
+    snap = weekly_snapshot.get_weekly_snapshot(
+        now=NOW, client=full_fake(v2__aggs__grouped=_grouped_failing_on("2026-06-19")))
+    spy = next(m for m in snap["etfs"]["macro"] if m.symbol == "SPY")
+    assert (spy.value, spy.week_change, spy.month_change, spy.quarter_change) == (110.0, 10.0, 15.79, None)
+    assert snap["etf_gaps"] == ["3M"]
+    notes = weekly_dashboard.weekly_data_notes(snap)
+    assert "ETFs: 3M left out for every ETF, because an earlier week's closes could not be fetched" in notes
+    history = [n for n in notes if "under 13 weeks of history" in n]
+    assert not any("SPY" in n or "QQQ" in n for n in history)       # not a history problem
+    assert not weekly_dashboard.is_weekly_degraded(snap)
+    assert "13 week(s) back failed: MassiveBudgetExceeded; 3M is left out" in capsys.readouterr().out
+
+
+def test_a_failed_current_week_still_blanks_the_etfs(offline_sources):
+    """Without this week's closes there is no ETF row to show."""
+    snap = weekly_snapshot.get_weekly_snapshot(
+        now=NOW, client=full_fake(v2__aggs__grouped=_grouped_failing_on("2026-09-18")))
+    etfs = [m for group in snap["etfs"].values() for m in group]
+    assert all(m.value is None and m.error == "massive failed: MassiveBudgetExceeded" for m in etfs)
+    assert snap["etf_gaps"] == []
+
+
+def test_a_missing_massive_key_costs_only_the_massive_rows(offline_sources, monkeypatch, capsys):
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    snap = weekly_snapshot.get_weekly_snapshot(now=NOW)          # builds its own client
+    for key in ("VIX", "HY OAS", "IG OAS", "DXY"):
+        assert snap["macro"][key].value is not None
+    for key in ("WTI", "10Y"):
+        assert snap["macro"][key].error == "massive failed: MassiveAuthError"
+    assert all(m.value is None for group in snap["etfs"].values() for m in group)
+    assert snap["massive_calls"] == 0
+    assert "no Massive calls (MassiveAuthError)" in capsys.readouterr().out
+
+
 def test_the_snapshot_log_shows_counts_not_values(offline_sources, capsys):
     weekly_snapshot.get_weekly_snapshot(now=NOW, client=full_fake())
     out = capsys.readouterr().out

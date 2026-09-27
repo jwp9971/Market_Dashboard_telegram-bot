@@ -25,7 +25,8 @@ async def send_message(text):
         await bot.send_message(chat_id=CHAT_ID, text=text)
         return True
     except Exception as e:
-        print(f"Telegram send failed: {e}")
+        # The type only: Telegram's error text can quote the request.
+        print(f"Telegram send failed: {type(e).__name__}")
         return False
 
 

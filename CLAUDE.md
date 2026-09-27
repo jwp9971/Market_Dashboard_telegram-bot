@@ -66,7 +66,7 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 
 ## Test conventions
 
-- `tests/conftest.py` **blocks the network** (`yfinance.download`, `yfinance.Ticker`, `requests.get` raise) and **freezes the clock** at 2026-09-16 01:00 UTC in `metrics` and `dashboard`. Patch fetchers (`sectors.fetch_yahoo_frame`, `macro.get_yfinance_series`, …) in tests; never rely on the real date. Pass explicit `now=` / `today=` when a test is about time.
+- `tests/conftest.py` **blocks the network** (`yfinance.download`, `yfinance.Ticker`, `requests.get`, `anthropic.Anthropic` and `telegram_bot.Bot` raise), **blanks every key** (env and module constants — `load_dotenv()` would otherwise bring the laptop's real keys back) and **freezes the clock** at 2026-09-16 01:00 UTC in `metrics` and `dashboard`. Patch fetchers (`sectors.fetch_yahoo_frame`, `macro.get_yfinance_series`, …) in tests; never rely on the real date. Pass explicit `now=` / `today=` when a test is about time.
 - Use `monkeypatch`, never direct assignment to module attributes — direct assignment leaks into later tests.
 - External SDKs are stubbed only when not installed, so the suite behaves the same in CI and in a full local venv.
 - `tests/test_readme_claims.py` checks README facts (ETF count, tickers, cron, exit codes, env vars, freshness windows) against the code. Change the README when behaviour changes, or CI fails.
@@ -96,6 +96,12 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
 - **First scheduled slot** (`0 3 * * 6`, 2026-09-26) was **dropped**: no run was ever created (checked 29 h later), although the workflow was `active` on `main`. The daily cron on this repo had fired 7/7 times (09-07…09-15), each 1 h 47 m – 2 h 12 m late. GitHub community discussion #185355 reports schedules silently stopping in mid-2026.
 - **Run #2** (manual, 2026-09-27): exit 0, 17 Massive calls (Friday 09-25 grouped daily returned 200 at 09:01 UTC Sunday), `claude-opus-5-5` (the user set the repository variable `WEEKLY_ANTHROPIC_MODEL`; effort left empty = `high`), `end_turn`, both messages sent. Log lines now appear as they happen.
 - **Schedule since 2026-09-27 (PR after #15):** primary `17 5 * * 6` (Sat 14:17 KST, after New York midnight all year) and backups `17 11 * * 6` (Sat 20:17 KST) and `17 3 * * 0` (Sun 12:17 KST), each guarded by `src/weekly_guard.py`. **First live check: Sat 10-03** — expect one delivering run and two ~20 s "slot skipped" runs.
+
+- **Robustness (PR after the backup slots, 2026-09-27):** a run degrades instead of dying.
+  - Claude client `timeout=360`, `max_retries=1` (`analyst.CLAUDE_TIMEOUT_SECONDS` / `CLAUDE_MAX_RETRIES`); SDK defaults (600 s × 3) could outlast the job. Claude and Telegram errors are logged as type (+ HTTP status) only.
+  - A missing `MASSIVE_API_KEY` costs only the Massive rows (`weekly_snapshot.via_massive`). ETFs are fetched before futures.
+  - A failed earlier-week grouped-daily call only drops that horizon for all ETFs (`snapshot["etf_gaps"]`, footer note); only this week's failure blanks the ETFs. One failed futures product loses only its row (the ratio carries the failing leg's reason).
+  - FRED retries once after 5 s on no response / 429 / 5xx; Yahoo logs `-> N rows, last <date>`.
 
 Next: new data and content ideas from the user, one branch and PR per change.
 
