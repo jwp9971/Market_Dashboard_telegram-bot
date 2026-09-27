@@ -11,8 +11,9 @@ load_dotenv()
 from metrics import (MAX_AGE_MARKET_DAYS, CHANGE_PCT, UNIT_USD, Metric,
                      mark_staleness, to_iso_date)
 
-# Alpaca is optional now. Import failures must not take down the Yahoo path,
-# so everything Alpaca-specific is guarded.
+# Alpaca is the default source but an optional import: a failure must not
+# take down the Yahoo path (ETF_SOURCE=yahoo), so everything Alpaca-specific
+# is guarded.
 try:
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
@@ -127,7 +128,7 @@ def _pct_change(series, offset):
     return round(((current - prior) / prior) * 100, 2)
 
 
-# --- Yahoo (default) -------------------------------------------------------
+# --- Yahoo (opt-in via ETF_SOURCE=yahoo) -----------------------------------
 
 def fetch_yahoo_frame(symbols, period="3mo"):
     """One batched request for every symbol, instead of one call per ETF."""
@@ -242,7 +243,7 @@ def _single_symbol_metric(symbol, label):
         return metric
 
 
-# --- Alpaca (opt-in via ETF_SOURCE=alpaca) ---------------------------------
+# --- Alpaca (default) ------------------------------------------------------
 
 def get_alpaca_client():
     if not ALPACA_AVAILABLE:

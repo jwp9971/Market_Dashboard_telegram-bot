@@ -6,8 +6,9 @@ Entry point for the weekly commentary: fetch, format, analyse, send, exit code.
 
 Exit codes are main.py's: 0 OK, 1 FAILED (nothing delivered), 2 DEGRADED
 (delivered, but a fallback/incomplete note or data that should not be read as
-a normal week). Nothing here prints a data value: the Actions log is public
-and Massive's terms forbid publishing its data.
+a normal week). Nothing here prints a data value: the Actions log is visible
+to anyone the repository is shared with, and Massive's terms forbid
+publishing its data.
 """
 import os
 import sys
@@ -27,7 +28,7 @@ DEGRADED_WARNING = ("Underlying weekly data is incomplete — see the data notes
 def run_weekly_report(now=None):
     """Runs one weekly report. Returns (exit_code, result_or_None)."""
     if telegram_bot.DRY_RUN and os.getenv("GITHUB_ACTIONS") == "true":
-        # A dry run prints both messages, i.e. every number, into a public log.
+        # A dry run prints both messages, i.e. every number, into the log.
         print("Refusing DRY_RUN in GitHub Actions: it would publish Massive data in the log.")
         return EXIT_FAILED, None
 
@@ -67,7 +68,7 @@ def main():
         exit_code, _ = run_weekly_report()
     except Exception as e:
         # Anything unexpected: print the type only. An exception's message or
-        # a traceback can quote a value, and the Actions log is public to
+        # a traceback can quote a value, and the Actions log is visible to
         # anyone the repository is shared with.
         print(f"Weekly report crashed: {type(e).__name__}")
         exit_code = EXIT_FAILED

@@ -275,7 +275,7 @@ if __name__ == "__main__":
 
     result = analyze_week(get_weekly_snapshot())
     if os.getenv("GITHUB_ACTIONS") == "true":
-        # Actions logs are public and the note quotes Massive data.
+        # Actions logs are visible to others, and the note quotes Massive data.
         print(f"source={result['source']} (note not printed in Actions)")
         sys.exit(0)
     print("\n" + result["analysis"])

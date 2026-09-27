@@ -33,14 +33,14 @@ python -m compileall -q src                           # syntax check, as CI does
 $env:DRY_RUN=1; python src/main.py    # full live pipeline, prints Telegram messages instead of sending (costs one Claude call)
 python src/macro.py                   # print just the macro snapshot
 python src/sectors.py                 # print just the ETF snapshot
-python scripts/massive_probe.py       # weekly branch: live Massive check (~8 free calls; by hand only, never in Actions)
+python scripts/massive_probe.py       # weekly: live Massive check (~8 free calls; by hand only, never in Actions)
 ```
 
 `requirements-direct.txt` records the packages actually imported; `requirements.txt` is the full lock.
 
 ## Architecture (daily bot)
 
-**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, primary `17 5 * * 6` UTC = Saturday 14:17 KST plus two guarded backup slots; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` keeps its Run button, and its old cron `0 23 * * 0-4` is noted in a comment there. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
+**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, primary `17 5 * * 6` UTC = Saturday 14:17 KST plus two guarded backup slots; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` has no cron (its old `0 23 * * 0-4` is noted in a comment there), and the workflow has been **disabled in the Actions UI since 2026-09-16** (state `disabled_manually`), so its Run button appears only after "Enable workflow". GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` installs `requirements.txt` + `requirements-dev.txt` and runs `compileall src scripts` + `pytest` on every pull request and on pushes to `main` (a superseded PR run is cancelled).
 
 Data flow:
 
@@ -62,7 +62,7 @@ Key invariants — these span several files:
 - **Time zones:** report date is KST (fixed +9, no tzdata needed); session boundaries are UTC. Functions taking `now` convert at each use.
 - **Telegram splitting** (`telegram_bot.build_message_parts`) reserves room for the `(i/n)` marker so no outgoing part exceeds 4096 characters.
 
-Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_KEY`, `FRED_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` (required); optional `ETF_SOURCE` (`alpaca` default | `yahoo`), `ALPACA_FEED` (`sip` default | `iex`), `ANTHROPIC_MODEL`, `ANTHROPIC_MAX_TOKENS` (16000), `ANTHROPIC_EFFORT` (`medium`), `DRY_RUN`. Local values live in the gitignored `.env`; CI uses GitHub Secrets. `MASSIVE_API_KEY` is also in the local `.env` for the weekly work.
+Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_KEY`, `FRED_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` (required); optional `ETF_SOURCE` (`alpaca` default | `yahoo`), `ALPACA_FEED` (`sip` default | `iex`), `ANTHROPIC_MODEL`, `ANTHROPIC_MAX_TOKENS` (16000), `ANTHROPIC_EFFORT` (`medium`), `DRY_RUN`. Local values live in the gitignored `.env`; CI uses GitHub Secrets. The weekly report needs `MASSIVE_API_KEY` (local `.env` and GitHub Secrets) but not the `ALPACA_*` pair; its model settings are `WEEKLY_ANTHROPIC_MODEL` / `WEEKLY_ANTHROPIC_EFFORT`.
 
 ## Test conventions
 
@@ -185,7 +185,7 @@ Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, fundi
   - `PYTHONUNBUFFERED=1`, so log lines appear as they happen (run #1's lines were all stamped at exit).
   - **Guard (`src/weekly_guard.py`, stdlib only, runs before `pip install`):** on `schedule` events only, it lists this workflow's runs created since the last completed week's Friday 21:00 UTC (`weeks.last_completed_week` + `metrics.US_SESSION_CLOSE_UTC_HOUR`) and skips the slot if one has its **"Run weekly commentary"** step at `success`. That step fails only on exit 1; exit 2 fails the separate "Flag degraded report" step, so degraded weeks count as sent and stay red. API unreadable → run anyway. Needs `permissions: actions: read`; `continue-on-error: true` so a broken guard still sends. The step name is `weekly_guard.DELIVERY_STEP`; a test keeps them equal.
   - The job runs only on `refs/heads/main`, so a Run button on another branch can't post to the chat. `timeout-minutes: 30`.
-  - Don't modify `daily-dashboard.yml`.
+  - `daily-dashboard.yml` changes only for shared upkeep (action versions, log settings); its trigger stays manual.
 - **Telegram: the real chat**, no test chat (the daily bot is inactive, so no clash). `DRY_RUN=1` is the safety switch while developing. So `telegram_bot.py` needs no chat-override change.
 
 ### Layout (agreed): flat, no separate folder
@@ -244,7 +244,7 @@ Each stage gets an overview and a user decision before any code.
   - A refusal currently becomes the deterministic fallback with the warning "Claude declined (<category>)".
 - The note is **signed** `— <model> · effort <effort>`.
 - **Markdown handling:** the live run returned Markdown headings, so the prompt now asks for plain text and `weekly_analyst.plain_text()` strips `#` headings and `**` / `__` markers before sending.
-  - The fixed prompt has **not yet been seen live**; check it in Stage F's `DRY_RUN`.
+  - The fixed prompt was confirmed live in Stage F's `DRY_RUN` and runs #1–#2: plain text, no Markdown.
 - The prompt gets breadth ("X of N up over 1W / 1M / 3M") computed in code, the movers and the footer notes. The HYG price-only caveat is spelled out.
 
 ### Stage G decisions (2026-09-24)
@@ -265,7 +265,7 @@ One local folder; switch branches in place (VS Code shows the current branch bot
 
 - `main` mirrors the live bot. **Never commit to it directly** — it changes only through merged PRs, then `git pull`.
 - **Agreed (2026-09-26):** one short-lived branch per change off `main` → PR into `main` → wait for the green **Tests** check on the PR (nothing enforces this: `main` has no branch protection, and GitHub Free doesn't offer it for private repos) → the user merges → delete the branch → `git checkout main; git pull`.
-- `weekly-commentary` and `weekly/stage-*` were the Stage A–G branches; all are merged and can be deleted.
+- `weekly-commentary` and `weekly/stage-*` were the Stage A–G branches; all were merged and deleted (2026-09-27).
 - Commit or stash before switching branches. The shared `.env` and `venv` stay put across switches; after switching, `pip install -r requirements.txt` if dependencies differ.
 - Switching branches locally cannot affect production — the live bot runs from GitHub `main` via Actions.
 

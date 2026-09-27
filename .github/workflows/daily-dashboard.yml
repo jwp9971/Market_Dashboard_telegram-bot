@@ -1,7 +1,9 @@
 name: Daily Market Dashboard
 
 # Manual only since 2026-09-24: the weekly report (weekly-commentary.yml)
-# replaced this as the scheduled bot. To bring the daily schedule back, add
+# replaced this as the scheduled bot. The workflow is also disabled in the
+# Actions page (since 2026-09-16): click "Enable workflow" there before the Run
+# button appears. To bring the daily schedule back, enable it and add
 #   schedule:
 #     - cron: '0 23 * * 0-4'
 on:
