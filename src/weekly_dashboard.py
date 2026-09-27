@@ -140,7 +140,7 @@ if __name__ == "__main__":
 
     snapshot = get_weekly_snapshot()
     if os.getenv("GITHUB_ACTIONS") == "true":
-        # Actions logs are public and Massive data may not be published.
+        # Actions logs are visible to others; Massive data may not be published.
         print("Values not printed in Actions.")
         sys.exit(0)
     text = format_weekly_dashboard(snapshot)

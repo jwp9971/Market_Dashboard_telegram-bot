@@ -18,7 +18,7 @@ background, through iterative AI-assisted development.
 | Report | State | Entry point | When it runs |
 |---|---|---|---|
 | **Weekly commentary** | **Live**, the scheduled report since 2026-09-24 | `src/weekly_main.py` | Every Saturday at 14:17 Korea time (with backup slots), or by hand |
-| Daily dashboard | Paused: still in the code, runs by hand only | `src/main.py` | Run workflow button only |
+| Daily dashboard | Paused: still in the code, runs by hand only | `src/main.py` | Run workflow button, after **Enable workflow** (see [Schedule](#schedule)) |
 
 - The weekly report was built in seven reviewed stages (PRs #7–#13) and
   merged to `main` on 2026-09-24 (PR #14). Both GitHub Actions runs so far,
@@ -174,7 +174,9 @@ Why these times:
   hour. The first scheduled slot, `0 3 * * 6` on 2026-09-26, never ran at
   all, and the daily report's slots used to start about two hours late.
 
-**Daily report:** manual only (the Run workflow button). Its old schedule was
+**Daily report:** manual only. Its workflow has also been switched off in the
+Actions page since 2026-09-16, so the Run workflow button appears only after
+**Actions → Daily Market Dashboard → Enable workflow**. Its old schedule was
 `0 23 * * 0-4` UTC (08:00 Korea time, Monday to Friday) and can be restored
 in `.github/workflows/daily-dashboard.yml`.
 
@@ -245,8 +247,8 @@ pip install -r requirements-dev.txt
 python -m pytest -q                    # no network, no API keys, no messages
 ```
 
-The same suite runs in GitHub Actions on every push and pull request, on
-Python 3.12. `tests/test_readme_claims.py` checks facts in this README against
+The same suite runs in GitHub Actions on every pull request and every push
+to `main`, on Python 3.12, with the full `requirements.txt` installed. `tests/test_readme_claims.py` checks facts in this README against
 the code.
 
 ---
@@ -273,8 +275,10 @@ backup slot that skips is green and says "slot skipped".
 
 ## The daily dashboard (paused)
 
-The original report ran every weekday morning until the weekly report
-replaced it on 2026-09-24. It is kept working and can be run by hand.
+The original report ran every weekday morning until 2026-09-16, when its
+workflow was switched off in the Actions page; the weekly report replaced it
+as the scheduled report on 2026-09-24. It is kept working and can be run by
+hand once the workflow is enabled again.
 
 <details>
 <summary>What it sends, data sources and freshness rules</summary>
@@ -394,8 +398,8 @@ close has certainly passed, and the gap is counted in **weekdays**:
 ```
 .github/workflows/
   weekly-commentary.yml Weekly report: Saturday slot, two backups, Run button
-  daily-dashboard.yml   Daily report: Run button only
-  tests.yml             Tests on every push and pull request
+  daily-dashboard.yml   Daily report: manual only (switched off in Actions)
+  tests.yml             Tests on pull requests and pushes to main
 src/
   weekly_main.py        Weekly entry point; owns the exit status
   weekly_guard.py       Weekly: skips a scheduled slot once the week was delivered

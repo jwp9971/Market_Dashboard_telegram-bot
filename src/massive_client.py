@@ -6,8 +6,9 @@ counted on its own, and answers 429 past that with no Retry-After header.
 Every call goes through MassiveClient.get() so that limit, retries, the
 on-disk cache and a per-run call budget are enforced in one place.
 
-Massive's terms forbid publishing its data to third parties. This repo is
-public and so are its Actions logs, so nothing here prints a data value --
+Massive's terms forbid publishing its data to third parties. The repo's
+Actions logs are visible to anyone it is shared with (it was public until
+2026-09-24), so nothing here prints a data value --
 only the endpoint, status, result count and wait time. The key travels in a
 header, never in a URL, a log line or a cache file, and cache/ is gitignored.
 """

@@ -1,13 +1,21 @@
 name: Tests
 
-# Runs on every push and every pull request. No secrets, no network calls,
-# no API spend — the suite stubs the external SDKs.
+# Runs on every pull request and on pushes to main (a branch push with a PR
+# open would otherwise run the same commit twice). No secrets, no network
+# calls, no API spend: the suite blocks the network, the Claude and Telegram
+# clients and every key (tests/conftest.py).
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
+
+# A newer push to the same pull request supersedes the run in progress.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -22,11 +30,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install test dependencies
-        run: pip install -r requirements-dev.txt
+      # The full pinned lock, the same one the weekly run installs, so a
+      # broken pin fails here instead of on a Saturday.
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Check every source file compiles
-        run: python -m compileall -q src
+        run: python -m compileall -q src scripts
 
       - name: Run tests
         run: python -m pytest -q

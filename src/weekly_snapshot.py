@@ -9,7 +9,7 @@ week as a Metric with 1W / 1M / 3M changes.
 
 Each source is isolated: one failing leaves its rows missing (with the reason)
 instead of sinking the run. Running this file prints the snapshot for a local
-check -- never in Actions, whose logs are public (see CLAUDE.md, Massive terms).
+check -- never in Actions, whose logs others can see (CLAUDE.md, Massive terms).
 """
 import os
 import sys
@@ -163,7 +163,7 @@ def get_weekly_snapshot(now=None, client=None):
 if __name__ == "__main__":
     snapshot = get_weekly_snapshot()
     if os.getenv("GITHUB_ACTIONS") == "true":
-        # Actions logs are public and Massive data may not be published.
+        # Actions logs are visible to others; Massive data may not be published.
         print("Values not printed in Actions.")
         sys.exit(0)
     print(f"\n{snapshot['label']}")
