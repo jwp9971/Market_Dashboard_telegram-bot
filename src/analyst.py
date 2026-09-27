@@ -26,6 +26,13 @@ ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "16000"))
 # medium keeps thinking proportionate. low/medium/high/xhigh/max.
 ANTHROPIC_EFFORT = (os.getenv("ANTHROPIC_EFFORT") or "medium").strip().lower()
 
+# The SDK default is 600 s per attempt and 2 retries, and a timeout is retried
+# too, so one hung call could run 30 minutes and the job's time limit would
+# kill the weekly run before anything was sent. A note takes well under a
+# minute (run #2, Opus 5.5: about 30 s); 6 minutes x 2 attempts caps it at 12.
+CLAUDE_TIMEOUT_SECONDS = 360
+CLAUDE_MAX_RETRIES = 1
+
 # Quality gates applied to Claude's output before it is presented as a
 # finished note. The prompt asks for a 600-word note in six sections; these
 # bounds are deliberately loose so only genuinely broken output is flagged.
@@ -197,7 +204,8 @@ def call_claude(prompt: str, system: Optional[str] = None, model: Optional[str] 
         return result
 
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=CLAUDE_TIMEOUT_SECONDS,
+                                     max_retries=CLAUDE_MAX_RETRIES)
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -242,8 +250,11 @@ def call_claude(prompt: str, system: Optional[str] = None, model: Optional[str] 
         result["text"] = "\n".join(pieces).strip() or None
         return result
     except Exception as exc:
-        result["error"] = str(exc)
-        print(f"Claude call failed: {exc}")
+        # The type and HTTP status only: the error text is raw API output, and
+        # it reaches both the Actions log and the Telegram warning banner.
+        status = getattr(exc, "status_code", None)
+        result["error"] = type(exc).__name__ + (f" (HTTP {status})" if status else "")
+        print(f"Claude call failed: {result['error']}")
         return result
 
 

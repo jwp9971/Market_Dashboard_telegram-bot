@@ -77,7 +77,13 @@ def weekly_data_notes(snapshot):
     if early:
         notes.append("Last value before Friday (a holiday, or the source runs a day behind): "
                      + _names(early))
-    short = [m for m in rows if m.value is not None and m.tracks_changes
+    # When the 13-weeks-back fetch failed, the snapshot's own note says so
+    # for every ETF; "under 13 weeks of history" would be wrong for them.
+    if "3M" in (snapshot.get("etf_gaps") or []):
+        rows_with_history = list(snapshot["macro"].values())
+    else:
+        rows_with_history = rows
+    short = [m for m in rows_with_history if m.value is not None and m.tracks_changes
              and m.week_change is not None and m.quarter_change is None]
     if short:
         notes.append("3M unavailable (under 13 weeks of history): " + _names(short))

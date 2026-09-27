@@ -33,7 +33,7 @@ def _fake_anthropic(monkeypatch, text, stop_reason="end_turn"):
             return _Response(text, stop_reason)
 
     class _Client:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, **settings):
             self.messages = _Messages()
 
     monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
@@ -77,14 +77,49 @@ def test_no_api_key_falls_back(monkeypatch):
 
 def test_api_exception_falls_back(monkeypatch):
     class _Client:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, **settings):
             raise RuntimeError("rate limited")
 
     monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
     monkeypatch.setattr(analyst, "ANTHROPIC_API_KEY", "test-key")
     result = analyst.analyze_market({}, {})
     assert result["source"] == "fallback"
-    assert any("rate limited" in w for w in result["warnings"])
+    assert result["warnings"] == ["Claude unavailable: RuntimeError"]
+
+
+def test_an_api_error_is_reported_by_type_and_status_never_its_text(monkeypatch, capsys):
+    """The error text is raw API output; it would reach the log and the chat."""
+    class _StatusError(Exception):
+        status_code = 529
+
+    class _Client:
+        def __init__(self, api_key=None, **settings):
+            self.messages = type("M", (), {"create": lambda self, **k: (_ for _ in ()).throw(
+                _StatusError('{"type":"error","message":"Overloaded: 761.69"}'))})()
+
+    monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
+    monkeypatch.setattr(analyst, "ANTHROPIC_API_KEY", "test-key")
+    result = analyst.call_claude("prompt")
+    assert result["error"] == "_StatusError (HTTP 529)"
+    assert "761.69" not in capsys.readouterr().out
+
+
+def test_the_client_has_a_bounded_timeout_and_one_retry(monkeypatch):
+    """SDK defaults (600 s x 3 attempts) could outlast the Actions job."""
+    seen = {}
+
+    class _Client:
+        def __init__(self, api_key=None, **settings):
+            seen.update(settings)
+            self.messages = type("M", (), {"create": lambda self, **k: _Response(GOOD_NOTE)})()
+
+    monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
+    monkeypatch.setattr(analyst, "ANTHROPIC_API_KEY", "test-key")
+    analyst.call_claude("prompt")
+    assert seen == {"timeout": analyst.CLAUDE_TIMEOUT_SECONDS,
+                    "max_retries": analyst.CLAUDE_MAX_RETRIES}
+    # Worst case, both attempts timing out, must leave room in the 30-minute job.
+    assert analyst.CLAUDE_TIMEOUT_SECONDS * (analyst.CLAUDE_MAX_RETRIES + 1) <= 15 * 60
 
 
 # --- Stage 4: the truncation root cause -----------------------------------
@@ -104,7 +139,7 @@ def test_thinking_and_budget_are_declared_explicitly(monkeypatch):
             return _Response(GOOD_NOTE)
 
     class _Client:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, **settings):
             self.messages = _Messages()
 
     monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
@@ -150,7 +185,7 @@ def test_a_refusal_is_reported_not_silently_dropped(monkeypatch):
             self.stop_details = type("D", (), {"category": "cyber"})()
 
     class _Client:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, **settings):
             self.messages = type("M", (), {"create": lambda self, **k: _Refusal()})()
 
     monkeypatch.setattr(sys.modules["anthropic"], "Anthropic", _Client, raising=False)
@@ -167,7 +202,7 @@ def test_call_settings_can_be_overridden_per_call(monkeypatch):
     captured = {}
 
     class _Client:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, **settings):
             self.messages = type("M", (), {
                 "create": lambda self, **k: captured.update(k) or _Response(GOOD_NOTE)})()
 

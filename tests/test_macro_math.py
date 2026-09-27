@@ -126,6 +126,84 @@ def test_fred_errors_do_not_leak_the_api_key(monkeypatch, capsys):
 
     monkeypatch.setattr(macro, "FRED_API_KEY", "SECRET123")
     monkeypatch.setattr(macro.requests, "get", exploding_get, raising=False)
+    monkeypatch.setattr(macro.time, "sleep", lambda seconds: None)
 
     macro.get_fred_series("DGS10")
     assert "SECRET123" not in capsys.readouterr().out
+
+
+class _FredResponse:
+    def __init__(self, status, observations=()):
+        self.status_code = status
+        self._observations = list(observations)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            error = macro.requests.RequestException(f"HTTP {self.status_code}")
+            error.response = self
+            raise error
+
+    def json(self):
+        return {"observations": self._observations}
+
+
+def _fred_answers(monkeypatch, *answers):
+    """requests.get returns (or raises) each answer in turn; returns the sleeps."""
+    queue, sleeps = list(answers), []
+
+    def fake_get(url, params=None, timeout=None):
+        answer = queue.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(macro, "FRED_API_KEY", "key")
+    monkeypatch.setattr(macro.requests, "get", fake_get, raising=False)
+    monkeypatch.setattr(macro.time, "sleep", sleeps.append)
+    return queue, sleeps
+
+
+def test_fred_retries_once_after_a_dropped_connection(monkeypatch):
+    """HY OAS is required: one blip used to mark the whole week degraded."""
+    queue, sleeps = _fred_answers(
+        monkeypatch, macro.requests.RequestException("connection reset"),
+        _FredResponse(200, [{"date": "2026-09-17", "value": "2.91"}]))
+    assert macro.get_fred_observations("BAMLH0A0HYM2") == [("2026-09-17", 2.91)]
+    assert sleeps == [macro.FRED_RETRY_DELAY_SECONDS] and queue == []
+
+
+def test_fred_retries_a_server_error_only_once(monkeypatch):
+    queue, sleeps = _fred_answers(monkeypatch, _FredResponse(503), _FredResponse(502),
+                                  _FredResponse(200))
+    assert macro.get_fred_observations("BAMLH0A0HYM2") == []
+    assert len(sleeps) == 1 and len(queue) == 1           # the third answer is never asked for
+
+
+def test_fred_does_not_retry_a_bad_request(monkeypatch):
+    queue, sleeps = _fred_answers(monkeypatch, _FredResponse(400), _FredResponse(200))
+    assert macro.get_fred_observations("NOPE") == []
+    assert sleeps == [] and len(queue) == 1
+
+
+def test_yahoo_logs_how_many_rows_it_got_but_no_value(monkeypatch, capsys):
+    class _Closes:
+        index = ["2026-09-17", "2026-09-18"]
+
+        def dropna(self):
+            return self
+
+        def __iter__(self):
+            return iter([98.76, 99.12])
+
+    class _Ticker:
+        def __init__(self, symbol):
+            pass
+
+        def history(self, **kwargs):
+            return {"Close": _Closes()}
+
+    monkeypatch.setattr(macro.yf, "Ticker", _Ticker, raising=False)
+    assert macro.get_yfinance_closes("DX-Y.NYB") == [("2026-09-17", 98.76), ("2026-09-18", 99.12)]
+    out = capsys.readouterr().out
+    assert "Yahoo DX-Y.NYB -> 2 rows, last 2026-09-18" in out
+    assert "99.12" not in out and "98.76" not in out

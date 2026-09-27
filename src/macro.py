@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+import time
 
 import requests
 from dotenv import load_dotenv
@@ -111,50 +112,71 @@ def get_yfinance_closes(ticker, period="6mo"):
     try:
         history = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=False)
         closes = history["Close"].dropna()
-        return [(to_iso_date(day), _coerce_numeric(value))
+        rows = [(to_iso_date(day), _coerce_numeric(value))
                 for day, value in zip(closes.index, closes)
                 if _coerce_numeric(value) is not None]
+        # The count and the last date only, so the log shows whether Yahoo
+        # answered from GitHub's runners without showing a value.
+        print(f"Yahoo {ticker} -> {len(rows)} rows" + (f", last {rows[-1][0]}" if rows else ""))
+        return rows
     except Exception as e:
         print(f"Error fetching {ticker}: {type(e).__name__}")
         return []
 
 
+# One retry, after a pause, for a dropped connection, a timeout, a 429 or a
+# 5xx. HY OAS is a required series, so a single blip used to mark the whole
+# weekly report degraded. A 4xx (bad key, unknown series) fails at once.
+FRED_RETRY_DELAY_SECONDS = 5
+
+
+def _fred_retryable(status):
+    return not isinstance(status, int) or status == 429 or status >= 500
+
+
 def get_fred_observations(series_id, limit=40):
     """
     Dated observations [('YYYY-MM-DD', value), ...], newest first, or [] if
-    the key is missing or the request fails. One API call per series.
+    the key is missing or the request fails twice. One API call per series,
+    two when the first one fails in a way worth retrying.
     """
     if not FRED_API_KEY:
         print("FRED_API_KEY is not set; skipping FRED series fetch for", series_id)
         return []
 
-    try:
-        url = "https://api.stlouisfed.org/fred/series/observations"
-        params = {
-            "series_id": series_id,
-            "api_key": FRED_API_KEY,
-            "file_type": "json",
-            "sort_order": "desc",
-            "limit": limit,
-        }
-        response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
-        observations = response.json().get("observations", [])
-        rows = []
-        for obs in observations:
-            value = _coerce_numeric(obs.get("value"))
-            if value is not None:
-                rows.append((to_iso_date(obs.get("date")), value))
-        return rows
-    except requests.RequestException as e:
-        # The request URL carries the API key, and requests puts the URL in
-        # its exception text -- log the status and series only.
-        status = getattr(getattr(e, "response", None), "status_code", "no response")
-        print(f"Error fetching FRED {series_id}: HTTP {status}")
-        return []
-    except Exception as e:
-        print(f"Unexpected error fetching FRED {series_id}: {type(e).__name__}")
-        return []
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series_id,
+        "api_key": FRED_API_KEY,
+        "file_type": "json",
+        "sort_order": "desc",
+        "limit": limit,
+    }
+    for attempt in (1, 2):
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            observations = response.json().get("observations", [])
+            rows = []
+            for obs in observations:
+                value = _coerce_numeric(obs.get("value"))
+                if value is not None:
+                    rows.append((to_iso_date(obs.get("date")), value))
+            return rows
+        except requests.RequestException as e:
+            # The request URL carries the API key, and requests puts the URL in
+            # its exception text -- log the status and series only.
+            status = getattr(getattr(e, "response", None), "status_code", "no response")
+            if attempt == 1 and _fred_retryable(status):
+                print(f"FRED {series_id}: HTTP {status}, retrying in {FRED_RETRY_DELAY_SECONDS}s")
+                time.sleep(FRED_RETRY_DELAY_SECONDS)
+                continue
+            print(f"Error fetching FRED {series_id}: HTTP {status}")
+            return []
+        except Exception as e:
+            print(f"Unexpected error fetching FRED {series_id}: {type(e).__name__}")
+            return []
+    return []
 
 
 def get_fred_series(series_id, limit=40):
