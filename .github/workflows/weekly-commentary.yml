@@ -1,12 +1,17 @@
 name: Weekly Commentary
 
-# Saturday 03:17 UTC = 12:17 KST, about six hours after Friday's close: Cboe
-# had updated its VIX file by 01:51 GMT the day after a session, and Massive
-# had the previous session by 05:00 UTC. Rates and credit still show Thursday
-# (FRED / Economy API run a business day late). Minute 17, not 0: GitHub's
-# scheduler is busiest on the hour, and the first scheduled run (0 3, on
-# 2026-09-26) had not started three hours later. Runs can still start late.
-# The Run button (workflow_dispatch) works from the default branch.
+# One report a week, three chances to send it. GitHub's scheduler can drop a
+# slot outright (0 3 * * 6 on 2026-09-26 never ran), so the primary slot has two
+# backups. Every scheduled run first checks (src/weekly_guard.py) whether an
+# earlier run already delivered the week that closed last Friday, and skips if
+# so; the Run button always runs.
+#
+# Primary Saturday 05:17 UTC = 14:17 KST: after midnight in New York all year,
+# so Massive's end-of-day data for Friday is final (it had the previous session
+# by 05:00 UTC; before New York midnight it may still refuse "today"). Cboe
+# updates its VIX file by about 02:00 UTC. Rates and credit still show Thursday
+# (FRED / Economy API run a business day late). Minute 17, not 0: the
+# scheduler is busiest on the hour. Runs can still start late.
 #
 # Massive's terms forbid publishing its data. The repository is private, but
 # its logs are still visible to anyone it is shared with: no DRY_RUN here, no
@@ -14,20 +19,27 @@ name: Weekly Commentary
 # statuses and counts.
 on:
   schedule:
-    - cron: '17 3 * * 6'
+    - cron: '17 5 * * 6'    # primary: Saturday 14:17 KST
+    - cron: '17 11 * * 6'   # backup: Saturday 20:17 KST
+    - cron: '17 3 * * 0'    # backup: Sunday 12:17 KST
   workflow_dispatch: {}
 
 permissions:
   contents: read
+  actions: read   # the guard reads this workflow's earlier runs
 
+# A slot that fires while another run is going waits for it, then its guard
+# sees that run's result.
 concurrency:
   group: weekly-commentary
   cancel-in-progress: false
 
 jobs:
   run-weekly:
+    # The Run button lets you pick any branch; only main posts to the chat.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Check out repo
         uses: actions/checkout@v5
@@ -37,10 +49,25 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Scheduled slots only. If the check itself breaks, the report still runs.
+      - name: Check whether this week's report already went out
+        id: guard
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python src/weekly_guard.py
+
       - name: Install dependencies
+        if: steps.guard.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
+      # This step fails only when nothing was delivered (exit 1), which is
+      # what the guard reads. A degraded report fails the next step instead,
+      # so the run is still red but the week counts as sent.
       - name: Run weekly commentary
+        id: weekly
+        if: steps.guard.outputs.skip != 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -62,7 +89,18 @@ jobs:
           set -e
           case "$code" in
             0) echo "### Weekly report delivered (OK)" >> "$GITHUB_STEP_SUMMARY" ;;
-            2) echo "### Weekly report delivered but DEGRADED - check the log for warnings" >> "$GITHUB_STEP_SUMMARY" ;;
-            *) echo "### Weekly report FAILED (exit $code)" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) echo "### Weekly report delivered but DEGRADED - check the log for warnings" >> "$GITHUB_STEP_SUMMARY"
+               echo "degraded=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "### Weekly report FAILED (exit $code)" >> "$GITHUB_STEP_SUMMARY"
+               exit "$code" ;;
           esac
-          exit $code
+
+      - name: Flag degraded report
+        if: steps.weekly.outputs.degraded == 'true'
+        run: |
+          echo "Delivered, but degraded (exit 2): see the warnings in the step above."
+          exit 2
+
+      - name: Note skipped slot
+        if: steps.guard.outputs.skip == 'true'
+        run: echo "### This week's report already went out - slot skipped" >> "$GITHUB_STEP_SUMMARY"

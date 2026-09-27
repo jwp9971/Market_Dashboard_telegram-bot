@@ -13,16 +13,18 @@ background, through iterative AI-assisted development.
 
 ## Current status
 
-*As of 2026-09-26*
+*As of 2026-09-27*
 
 | Report | State | Entry point | When it runs |
 |---|---|---|---|
-| **Weekly commentary** | **Live**, the scheduled report since 2026-09-24 | `src/weekly_main.py` | Every Saturday at 12:17 Korea time, or by hand |
+| **Weekly commentary** | **Live**, the scheduled report since 2026-09-24 | `src/weekly_main.py` | Every Saturday at 14:17 Korea time (with backup slots), or by hand |
 | Daily dashboard | Paused: still in the code, runs by hand only | `src/main.py` | Run workflow button only |
 
 - The weekly report was built in seven reviewed stages (PRs #7–#13) and
-  merged to `main` on 2026-09-24 (PR #14). Its first GitHub Actions run the
-  same day delivered both messages cleanly (exit 0).
+  merged to `main` on 2026-09-24 (PR #14). Both GitHub Actions runs so far,
+  on 2026-09-24 and 2026-09-27, were started by hand and delivered cleanly
+  (exit 0). The first scheduled slot, on 2026-09-26, was dropped by GitHub,
+  which is why the schedule now has backup slots (see [Schedule](#schedule)).
 - The repository is private. Most weekly data comes from Massive, whose terms
   allow personal use only (see [Data-use rules](#data-use-rules)).
 - **Next:** new data and content for the weekly report, one reviewed change
@@ -143,22 +145,44 @@ forbid publishing its data or passing it to others. So:
 
 ## Schedule
 
-**Weekly report:** `17 3 * * 6` UTC, which is **12:17 Korea time every
-Saturday**. It runs about six hours after Friday's close, once Friday's ETF,
-futures and VIX data have been published. Rates and credit still show
-Thursday, because those sources run one business day behind, and the footer
-says so. The minute is 17 rather than 0 because GitHub's scheduler is busiest
-on the hour: the first scheduled run, set for `0 3` on 2026-09-26, had not
-started three hours later.
+**Weekly report:** one report a week, with three chances to send it.
+
+| Slot | Cron (UTC) | Korea time |
+|---|---|---|
+| Primary | `17 5 * * 6` | Saturday 14:17 |
+| Backup | `17 11 * * 6` | Saturday 20:17 |
+| Backup | `17 3 * * 0` | Sunday 12:17 |
+
+Every scheduled run first checks whether an earlier run already delivered the
+week that closed on Friday (`src/weekly_guard.py`). If one did, the slot is
+skipped in about 20 seconds. So normally the primary sends the report and the
+backups skip; if GitHub drops the primary, or it fails before anything is
+sent, the next slot sends it. A degraded report counts as sent. A run started
+with the Run button always runs, and later slots then skip. If the check
+can't reach GitHub's API, the slot runs anyway: a duplicate is better than a
+missed week.
+
+Why these times:
+
+- The primary runs after midnight in New York all year, so Massive's
+  end-of-day data for Friday is final. Before that, Massive may still refuse
+  Friday as "today".
+- Cboe's VIX file has Friday by about 02:00 UTC.
+- Rates and credit still show Thursday, because those sources run one
+  business day behind; the footer says so.
+- The minute is 17 rather than 0 because GitHub's scheduler is busiest on the
+  hour. The first scheduled slot, `0 3 * * 6` on 2026-09-26, never ran at
+  all, and the daily report's slots used to start about two hours late.
 
 **Daily report:** manual only (the Run workflow button). Its old schedule was
 `0 23 * * 0-4` UTC (08:00 Korea time, Monday to Friday) and can be restored
 in `.github/workflows/daily-dashboard.yml`.
 
-GitHub's scheduled workflows are best-effort. They often start late and can
-occasionally be skipped. If no report has arrived by mid-afternoon Korea time,
-start one with **Actions → Weekly Commentary → Run workflow**. A late
-scheduled run can still start afterwards, which would send a second copy.
+GitHub's scheduled workflows are best-effort: they often start late and can
+be dropped. If no report has arrived by Sunday afternoon Korea time, start
+one with **Actions → Weekly Commentary → Run workflow** on `main`; any
+scheduled slot after that skips. The job only runs from `main`, so a run
+started on another branch does nothing.
 
 ---
 
@@ -240,7 +264,10 @@ happened:
 
 Degraded reports are still delivered, with a ⚠️ banner on the note naming the
 reason and a data-notes footer on the snapshot. The run summary in Actions
-says "delivered (OK)", "delivered but DEGRADED" or "FAILED".
+says "delivered (OK)", "delivered but DEGRADED" or "FAILED". For the weekly
+report, a degraded run turns red at its "Flag degraded report" step, while
+the delivery step stays green, so the backup slots know the week went out. A
+backup slot that skips is green and says "slot skipped".
 
 ---
 
@@ -366,11 +393,12 @@ close has certainly passed, and the gap is counted in **weekdays**:
 
 ```
 .github/workflows/
-  weekly-commentary.yml Weekly report: Saturday schedule + Run button
+  weekly-commentary.yml Weekly report: Saturday slot, two backups, Run button
   daily-dashboard.yml   Daily report: Run button only
   tests.yml             Tests on every push and pull request
 src/
   weekly_main.py        Weekly entry point; owns the exit status
+  weekly_guard.py       Weekly: skips a scheduled slot once the week was delivered
   weekly_snapshot.py    Weekly: assembles every weekly number
   weeks.py              Weekly: Mon-Fri week-end closes and 1W / 1M / 3M changes
   massive_client.py     Massive API access: rate limit, retries, cache, call budget
@@ -410,7 +438,9 @@ text; only `Metric` produces display strings.
 ## Known limitations
 
 - **No delivery guarantee.** GitHub's schedule is best-effort, so a run can
-  start late or be skipped.
+  start late or be dropped. The two backup slots cover a dropped slot, but
+  not a scheduler that stops firing altogether (reported by other GitHub
+  users in mid-2026); then only the Run button helps.
 - **Weekly ETF changes are price-only.** Massive doesn't adjust for
   dividends, so high-yield funds such as HYG look weaker than their total
   return. The daily report's changes depend on its source: Alpaca's are
