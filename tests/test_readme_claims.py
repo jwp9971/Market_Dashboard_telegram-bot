@@ -58,9 +58,10 @@ def test_the_schedule_matches_the_workflow():
     """Since 2026-09-24 the weekly report is the scheduled bot; the daily one
     is manual only."""
     weekly = (ROOT / ".github/workflows/weekly-commentary.yml").read_text(encoding="utf-8")
-    cron = re.search(r"^\s*- cron:\s*'([^']+)'", weekly, re.MULTILINE).group(1)
-    assert cron == "17 3 * * 6"
-    assert cron in README
+    crons = re.findall(r"^\s*- cron:\s*'([^']+)'", weekly, re.MULTILINE)
+    assert crons[0] == "17 5 * * 6"                  # the primary slot comes first
+    for cron in crons:
+        assert f"`{cron}`" in README, f"schedule slot {cron} is undocumented"
     daily = (ROOT / ".github/workflows/daily-dashboard.yml").read_text(encoding="utf-8")
     assert not re.search(r"^\s*- cron:", daily, re.MULTILINE)
 

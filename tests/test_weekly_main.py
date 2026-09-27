@@ -114,11 +114,53 @@ def test_an_unexpected_crash_prints_only_its_type(run, monkeypatch, capsys):
     assert "761.69" not in out and run["sent"] == []
 
 
-def test_the_workflow_runs_saturday_noon_kst_or_by_hand():
+def _step(name):
+    """The workflow lines of one step, from its '- name:' to the next one."""
+    lines = _workflow_lines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {name}")
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("- name:")),
+               len(lines))
+    return "\n".join(lines[start:end])
+
+
+def test_the_workflow_has_a_primary_slot_two_backups_and_the_run_button():
+    """2026-09-26's only slot was dropped by GitHub; one slot is not enough."""
     text = "\n".join(_workflow_lines())
     assert "workflow_dispatch" in text
-    assert text.count("cron:") == 1 and "cron: '17 3 * * 6'" in text
+    crons = [line.split("cron:", 1)[1].strip() for line in _workflow_lines() if "cron:" in line]
+    assert crons == ["'17 5 * * 6'", "'17 11 * * 6'", "'17 3 * * 0'"]
     assert "push:" not in text and "pull_request" not in text
+
+
+def test_every_scheduled_slot_checks_first_whether_the_week_went_out():
+    import weekly_guard
+    text = "\n".join(_workflow_lines())
+    guard = _step("Check whether this week's report already went out")
+    assert "if: github.event_name == 'schedule'" in guard
+    assert "continue-on-error: true" in guard          # a broken check still sends
+    assert "python src/weekly_guard.py" in guard
+    assert "GH_TOKEN: ${{ github.token }}" in guard
+    assert "actions: read" in text and "contents: read" in text
+    # The guard runs before the install, so a skipped slot costs seconds.
+    assert text.index("python src/weekly_guard.py") < text.index("pip install")
+    for name in ("Install dependencies", weekly_guard.DELIVERY_STEP):
+        assert "if: steps.guard.outputs.skip != 'true'" in _step(name)
+
+
+def test_only_a_failed_delivery_fails_the_delivery_step():
+    """The guard reads the delivery step: degraded (exit 2) must leave it green."""
+    import weekly_guard
+    delivery = _step(weekly_guard.DELIVERY_STEP)
+    assert "python src/weekly_main.py" in delivery
+    assert 'echo "degraded=true" >> "$GITHUB_OUTPUT"' in delivery
+    exits = [line.strip() for line in delivery.splitlines() if "exit" in line]
+    assert exits == ['exit "$code" ;;']                  # only in the FAILED branch
+    flag = _step("Flag degraded report")
+    assert "if: steps.weekly.outputs.degraded == 'true'" in flag and "exit 2" in flag
+
+
+def test_only_main_can_post_to_the_chat():
+    assert "if: github.ref == 'refs/heads/main'" in "\n".join(_workflow_lines())
 
 
 def test_the_daily_workflow_is_manual_only_now():

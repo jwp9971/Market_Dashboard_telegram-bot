@@ -40,7 +40,7 @@ python scripts/massive_probe.py       # weekly branch: live Massive check (~8 fr
 
 ## Architecture (daily bot)
 
-**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, `17 3 * * 6` UTC = Saturday 12:17 KST; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` keeps its Run button, and its old cron `0 23 * * 0-4` is noted in a comment there. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
+**Since Stage G the scheduled bot is the weekly one** (`src/weekly_main.py`, `.github/workflows/weekly-commentary.yml`, primary `17 5 * * 6` UTC = Saturday 14:17 KST plus two guarded backup slots; see "Weekly Commentary" below). The daily bot described here is **manual only**: `daily-dashboard.yml` keeps its Run button, and its old cron `0 23 * * 0-4` is noted in a comment there. GitHub only runs scheduled workflows from the default branch, so a workflow on another branch cannot fire on a schedule. `tests.yml` runs `compileall` + `pytest` on every push and pull request.
 
 Data flow:
 
@@ -93,7 +93,9 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
   - The **first real send reached the user's Telegram chat**: exit 0, `claude-sonnet-5`, 3.7k input and 3.7k output tokens.
 - `MASSIVE_API_KEY` is in the local `.env` and in GitHub Secrets.
 - **First GitHub run** (manual, 2026-09-24, run #1): exit 0, 18 Massive calls (two 60 s rate-limit waits, ~3 min), `claude-sonnet-5` `end_turn`, both messages sent. The log showed statuses and counts only. Whether Yahoo (DXY) answered from the runner isn't visible in the log, only in the message.
-- **First scheduled run** (`0 3 * * 6`, 2026-09-26) had not started by 06:07 UTC although the workflow was `active`, so GitHub most likely delayed or dropped it; the user planned to run it by hand. The cron moved to `17 3 * * 6` to avoid the top of the hour.
+- **First scheduled slot** (`0 3 * * 6`, 2026-09-26) was **dropped**: no run was ever created (checked 29 h later), although the workflow was `active` on `main`. The daily cron on this repo had fired 7/7 times (09-07…09-15), each 1 h 47 m – 2 h 12 m late. GitHub community discussion #185355 reports schedules silently stopping in mid-2026.
+- **Run #2** (manual, 2026-09-27): exit 0, 17 Massive calls (Friday 09-25 grouped daily returned 200 at 09:01 UTC Sunday), `claude-opus-5-5` (the user set the repository variable `WEEKLY_ANTHROPIC_MODEL`; effort left empty = `high`), `end_turn`, both messages sent. Log lines now appear as they happen.
+- **Schedule since 2026-09-27 (PR after #15):** primary `17 5 * * 6` (Sat 14:17 KST, after New York midnight all year) and backups `17 11 * * 6` (Sat 20:17 KST) and `17 3 * * 0` (Sun 12:17 KST), each guarded by `src/weekly_guard.py`. **First live check: Sat 10-03** — expect one delivering run and two ~20 s "slot skipped" runs.
 
 Next: new data and content ideas from the user, one branch and PR per change.
 
@@ -172,9 +174,11 @@ Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, fundi
   - No observation inside the target week means the value is **missing** ("no data in the week of …"), never last week's number.
   - A 1M/3M with no prior close is simply left out. AIHY (listed 07-21) and NCLD (listed 08-06) have no 3M yet.
 - **Weekly workflow (`.github/workflows/weekly-commentary.yml`, Stage F):**
-  - Stage F: `workflow_dispatch` only; Stage G added the Saturday cron. It uses the secrets `TELEGRAM_*`, `ANTHROPIC_API_KEY`, `FRED_API_KEY` and `MASSIVE_API_KEY`, and takes `WEEKLY_ANTHROPIC_MODEL` / `_EFFORT` from repository **variables** (`vars.*`; empty means the code defaults).
+  - Stage F: `workflow_dispatch` only; Stage G added the Saturday cron; 2026-09-27 added the backups and the guard. It uses the secrets `TELEGRAM_*`, `ANTHROPIC_API_KEY`, `FRED_API_KEY` and `MASSIVE_API_KEY`, and takes `WEEKLY_ANTHROPIC_MODEL` / `_EFFORT` from repository **variables** (`vars.*`; empty means the code defaults).
   - It has no `DRY_RUN`, no artifacts and no `actions/cache`. `tests/test_weekly_main.py` enforces all of this.
   - `PYTHONUNBUFFERED=1`, so log lines appear as they happen (run #1's lines were all stamped at exit).
+  - **Guard (`src/weekly_guard.py`, stdlib only, runs before `pip install`):** on `schedule` events only, it lists this workflow's runs created since the last completed week's Friday 21:00 UTC (`weeks.last_completed_week` + `metrics.US_SESSION_CLOSE_UTC_HOUR`) and skips the slot if one has its **"Run weekly commentary"** step at `success`. That step fails only on exit 1; exit 2 fails the separate "Flag degraded report" step, so degraded weeks count as sent and stay red. API unreadable → run anyway. Needs `permissions: actions: read`; `continue-on-error: true` so a broken guard still sends. The step name is `weekly_guard.DELIVERY_STEP`; a test keeps them equal.
+  - The job runs only on `refs/heads/main`, so a Run button on another branch can't post to the chat. `timeout-minutes: 30`.
   - Don't modify `daily-dashboard.yml`.
 - **Telegram: the real chat**, no test chat (the daily bot is inactive, so no clash). `DRY_RUN=1` is the safety switch while developing. So `telegram_bot.py` needs no chat-override change.
 
@@ -188,6 +192,7 @@ src/massive.py             Massive collectors → Metric records                
 src/weekly_dashboard.py    weekly snapshot layout                                  (D)
 src/weekly_analyst.py      weekly prompt, required sections, fallback              (E)
 src/weekly_main.py         weekly entry point + exit code                          (F)
+src/weekly_guard.py        skip a scheduled slot once the week was delivered      (after G)
 scripts/massive_probe.py   the only live-Massive caller, run by hand               (B)
 tests/fixtures/massive/    synthetic JSON samples (committed; never real data)
 cache/                     runtime response cache (gitignored)
@@ -239,9 +244,9 @@ Each stage gets an overview and a user decision before any code.
 ### Stage G decisions (2026-09-24)
 
 - **Weekly replaces daily.**
-  - `weekly-commentary.yml` runs on `cron: '17 3 * * 6'` = **Saturday 12:17 KST** (was `0 3` until 2026-09-26, see Status) and keeps its Run button.
+  - `weekly-commentary.yml` ran on `cron: '0 3 * * 6'` (Saturday 12:00 KST); it is now three guarded slots (see Status) and keeps its Run button.
   - `daily-dashboard.yml` lost only its `schedule:`. It is manual-only now, and a comment there shows the old cron for restoring it. Tests enforce both (`test_weekly_main.py`, `test_readme_claims.py`).
-- **Why that hour:** it is six hours after Friday's close. Cboe updated its VIX file at 01:51 GMT the day after a session, and Massive had the previous session by 05:00 UTC. Rates and credit still show Thursday; the footer says so. GitHub may start runs 1–2 h late.
+- **Why that hour (revised 2026-09-27):** after New York midnight, so Massive's end-of-day Friday bar is final — Massive/Polygon Basic can refuse "today's data before end of day" with a 403, which `massive_client` treats as `MassiveAuthError` and which would blank all 22 ETFs (not observed; the only timing evidence is "had the previous session by 05:00 UTC"). Cboe updated its VIX file at 01:51 GMT the day after a session. Rates and credit still show Thursday; the footer says so. GitHub may start runs 1–2 h late.
 - **The repository goes private** (the user does this in Settings, *before* the merge to `main`), so Actions logs are no longer public. The no-values-in-logs rules still apply.
 - **`weekly_main.main()` catches any unexpected exception and prints only its type.** An exception message or traceback can quote a value.
 - The test fixtures' real Cboe VIX numbers were replaced with invented ones.
