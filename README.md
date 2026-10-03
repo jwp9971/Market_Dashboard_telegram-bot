@@ -17,7 +17,7 @@ background, through iterative AI-assisted development.
 
 | Report | State | Entry point | When it runs |
 |---|---|---|---|
-| **Weekly commentary** | **Live**, the scheduled report since 2026-09-24 | `src/weekly_main.py` | Every Saturday at 14:17 Korea time (with backup slots), or by hand |
+| **Weekly commentary** | **Live**, the scheduled report since 2026-09-24 | `src/weekly_main.py` | Every Monday at 08:17 Korea time (with backup slots), or by hand |
 | Daily dashboard | Paused: still in the code, runs by hand only | `src/main.py` | Run workflow button, after **Enable workflow** (see [Schedule](#schedule)) |
 
 - The weekly report was built in seven reviewed stages (PRs #7–#13) and
@@ -149,9 +149,13 @@ forbid publishing its data or passing it to others. So:
 
 | Slot | Cron (UTC) | Korea time |
 |---|---|---|
-| Primary | `17 5 * * 6` | Saturday 14:17 |
-| Backup | `17 11 * * 6` | Saturday 20:17 |
-| Backup | `17 3 * * 0` | Sunday 12:17 |
+| Primary | `17 23 * * 0` | Monday 08:17 |
+| Backup | `17 3 * * 1` | Monday 12:17 |
+| Backup | `17 9 * * 1` | Monday 18:17 |
+
+The cron times are UTC, so the Monday-morning primary is written as Sunday
+23:17. Until 2026-10-03 the report ran on Saturday afternoon; it moved to
+Monday morning after no Saturday slot had ever fired.
 
 Every scheduled run first checks whether an earlier run already delivered the
 week that closed on Friday (`src/weekly_guard.py`). If one did, the slot is
@@ -164,12 +168,13 @@ missed week.
 
 Why these times:
 
-- The primary runs after midnight in New York all year, so Massive's
-  end-of-day data for Friday is final. Before that, Massive may still refuse
-  Friday as "today".
-- Cboe's VIX file has Friday by about 02:00 UTC.
+- 23:00 UTC is the hour band the daily report's schedule used, and that
+  schedule fired every time on this repo (about two hours late).
+- By Monday every Friday source is final: Massive's end-of-day bars and
+  Cboe's VIX file.
 - Rates and credit still show Thursday, because those sources run one
-  business day behind; the footer says so.
+  business day behind and Friday's values only appear on Monday US time; the
+  footer says so.
 - The minute is 17 rather than 0 because GitHub's scheduler is busiest on the
   hour. The first scheduled slot, `0 3 * * 6` on 2026-09-26, never ran at
   all, and the daily report's slots used to start about two hours late.
@@ -181,7 +186,7 @@ Actions page since 2026-09-16, so the Run workflow button appears only after
 in `.github/workflows/daily-dashboard.yml`.
 
 GitHub's scheduled workflows are best-effort: they often start late and can
-be dropped. If no report has arrived by Sunday afternoon Korea time, start
+be dropped. If no report has arrived by Monday evening Korea time, start
 one with **Actions → Weekly Commentary → Run workflow** on `main`; any
 scheduled slot after that skips. The job only runs from `main`, so a run
 started on another branch does nothing.
@@ -397,7 +402,7 @@ close has certainly passed, and the gap is counted in **weekdays**:
 
 ```
 .github/workflows/
-  weekly-commentary.yml Weekly report: Saturday slot, two backups, Run button
+  weekly-commentary.yml Weekly report: Monday slot, two backups, Run button
   daily-dashboard.yml   Daily report: manual only (switched off in Actions)
   tests.yml             Tests on pull requests and pushes to main
 src/

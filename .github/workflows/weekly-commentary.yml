@@ -6,12 +6,14 @@ name: Weekly Commentary
 # earlier run already delivered the week that closed last Friday, and skips if
 # so; the Run button always runs.
 #
-# Primary Saturday 05:17 UTC = 14:17 KST: after midnight in New York all year,
-# so Massive's end-of-day data for Friday is final (it had the previous session
-# by 05:00 UTC; before New York midnight it may still refuse "today"). Cboe
-# updates its VIX file by about 02:00 UTC. Rates and credit still show Thursday
-# (FRED / Economy API run a business day late). Minute 17, not 0: the
-# scheduler is busiest on the hour. Runs can still start late.
+# Monday morning KST (moved from Saturday on 2026-10-03). The primary is
+# Sunday 23:17 UTC = Monday 08:17 KST, the hour band the daily bot's cron
+# (0 23 * * 0-4) used and which fired 7/7 times on this repo. By then every
+# Friday source is final (Massive end-of-day bars, Cboe VIX). Rates and credit
+# still show Thursday: FRED / Economy API run a business day late, and
+# Friday's values only appear on Monday US time. Minute 17, not 0: the
+# scheduler is busiest on the hour. Runs can still start late (about 2 h has
+# been typical here).
 #
 # Massive's terms forbid publishing its data. The repository is private, but
 # its logs are still visible to anyone it is shared with: no DRY_RUN here, no
@@ -19,9 +21,9 @@ name: Weekly Commentary
 # statuses and counts.
 on:
   schedule:
-    - cron: '17 5 * * 6'    # primary: Saturday 14:17 KST
-    - cron: '17 11 * * 6'   # backup: Saturday 20:17 KST
-    - cron: '17 3 * * 0'    # backup: Sunday 12:17 KST
+    - cron: '17 23 * * 0'   # primary: Monday 08:17 KST (Sunday 23:17 UTC)
+    - cron: '17 3 * * 1'    # backup: Monday 12:17 KST
+    - cron: '17 9 * * 1'    # backup: Monday 18:17 KST
   workflow_dispatch: {}
 
 permissions:

@@ -12,7 +12,7 @@ import weekly_guard
 from weekly_guard import DELIVERY_STEP, already_delivered, should_skip, week_closed_at
 
 UTC = timezone.utc
-PRIMARY = datetime(2026, 10, 3, 5, 17, tzinfo=UTC)          # Saturday 14:17 KST
+PRIMARY = datetime(2026, 10, 4, 23, 17, tzinfo=UTC)         # Monday 08:17 KST
 CLOSED = datetime(2026, 10, 2, 21, 0, tzinfo=UTC)            # Friday's US close
 ENV = {"GITHUB_REPOSITORY": "owner/repo", "GH_TOKEN": "token", "GITHUB_RUN_ID": "99"}
 
@@ -30,10 +30,11 @@ def run(run_id, created, delivery="success", flag=None):
 # --- which week ---------------------------------------------------------------------
 
 @pytest.mark.parametrize("now", [
-    PRIMARY,                                                 # Saturday primary
-    datetime(2026, 10, 3, 11, 17, tzinfo=UTC),               # Saturday backup
-    datetime(2026, 10, 4, 3, 17, tzinfo=UTC),                # Sunday backup
-    datetime(2026, 10, 5, 12, 0, tzinfo=UTC),                # a late manual Monday
+    PRIMARY,                                                 # Monday primary (Sun UTC)
+    datetime(2026, 10, 5, 3, 17, tzinfo=UTC),                # Monday 12:17 KST backup
+    datetime(2026, 10, 5, 9, 17, tzinfo=UTC),                # Monday 18:17 KST backup
+    datetime(2026, 10, 3, 5, 56, tzinfo=UTC),                # a Saturday manual run
+    datetime(2026, 10, 4, 3, 17, tzinfo=UTC),                # a Sunday manual run
     datetime(2026, 10, 2, 21, 30, tzinfo=UTC),               # Friday, just after the close
 ])
 def test_the_week_counts_from_last_fridays_close(now):
