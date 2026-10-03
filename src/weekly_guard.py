@@ -3,7 +3,7 @@ Has this week's report already gone out? The check in front of every scheduled
 slot of the weekly workflow.
 
 GitHub's scheduler can drop a slot outright -- 2026-09-26 03:00 UTC produced no
-run at all -- so the workflow has a primary Saturday slot and later backups.
+run at all -- so the workflow has a primary Monday slot and later backups.
 Each scheduled run first asks the GitHub API whether an earlier run of this
 workflow already delivered the week that closed last Friday, and skips
 everything else if so. Manual runs never ask.

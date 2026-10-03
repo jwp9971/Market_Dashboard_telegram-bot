@@ -128,7 +128,7 @@ def test_the_workflow_has_a_primary_slot_two_backups_and_the_run_button():
     text = "\n".join(_workflow_lines())
     assert "workflow_dispatch" in text
     crons = [line.split("cron:", 1)[1].strip() for line in _workflow_lines() if "cron:" in line]
-    assert crons == ["'17 5 * * 6'", "'17 11 * * 6'", "'17 3 * * 0'"]
+    assert crons == ["'17 23 * * 0'", "'17 3 * * 1'", "'17 9 * * 1'"]
     assert "push:" not in text and "pull_request" not in text
 
 
