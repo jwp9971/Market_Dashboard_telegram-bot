@@ -13,18 +13,27 @@ background, through iterative AI-assisted development.
 
 ## Current status
 
-*As of 2026-09-27*
+*As of 2026-10-03*
 
 | Report | State | Entry point | When it runs |
 |---|---|---|---|
-| **Weekly commentary** | **Live**, the scheduled report since 2026-09-24 | `src/weekly_main.py` | Every Monday at 08:17 Korea time (with backup slots), or by hand |
+| **Weekly commentary** | **Live**: delivers every week; the automatic schedule is still being proven (see below) | `src/weekly_main.py` | Every Monday at 08:17 Korea time (with backup slots), or by hand |
 | Daily dashboard | Paused: still in the code, runs by hand only | `src/main.py` | Run workflow button, after **Enable workflow** (see [Schedule](#schedule)) |
 
 - The weekly report was built in seven reviewed stages (PRs #7–#13) and
-  merged to `main` on 2026-09-24 (PR #14). Both GitHub Actions runs so far,
-  on 2026-09-24 and 2026-09-27, were started by hand and delivered cleanly
-  (exit 0). The first scheduled slot, on 2026-09-26, was dropped by GitHub,
-  which is why the schedule now has backup slots (see [Schedule](#schedule)).
+  merged to `main` on 2026-09-24 (PR #14).
+- All three GitHub Actions runs so far (2026-09-24, 09-27 and 10-03) were
+  started by hand, and all delivered cleanly (exit 0).
+- **No scheduled run has fired yet.** GitHub dropped the Saturday slots on
+  2026-09-26 and 2026-10-03 without creating a run, although the workflow
+  file and settings check out. The schedule now has backup slots and, since
+  2026-10-03, runs on Monday morning (see [Schedule](#schedule)).
+  - **Mon 10-05:** the slots should appear and skip, because the 10-03 manual
+    run already sent that week. Any run marked `schedule` proves the
+    schedule fires.
+  - **Mon 10-12:** the first scheduled run that sends a report.
+- The note is currently written by `claude-opus-5-5`, set through the
+  repository variable `WEEKLY_ANTHROPIC_MODEL`.
 - The repository is private. Most weekly data comes from Massive, whose terms
   allow personal use only (see [Data-use rules](#data-use-rules)).
 - **Next:** new data and content for the weekly report, one reviewed change
@@ -41,7 +50,7 @@ shortened:
 
 ```
 📊 Weekly Market Dashboard
-🗓 Week of Sep 14–18, 2026 (KST report: Saturday, September 19, 2026)
+🗓 Week of Sep 14–18, 2026 (KST report: Monday, September 21, 2026)
 📏 Week-end closes: 1W vs previous Friday · 1M = 4 weeks · 3M = 13 weeks
 
 🏆 Leaders 1W: SOXX ▲4.10% · DRAM ▲3.85% · IGV ▲2.60%
@@ -154,8 +163,8 @@ forbid publishing its data or passing it to others. So:
 | Backup | `17 9 * * 1` | Monday 18:17 |
 
 The cron times are UTC, so the Monday-morning primary is written as Sunday
-23:17. Until 2026-10-03 the report ran on Saturday afternoon; it moved to
-Monday morning after no Saturday slot had ever fired.
+23:17. Until 2026-10-03 the slots were on Saturday; they moved to Monday
+morning after no Saturday slot had ever fired.
 
 Every scheduled run first checks whether an earlier run already delivered the
 week that closed on Friday (`src/weekly_guard.py`). If one did, the slot is
@@ -176,8 +185,7 @@ Why these times:
   business day behind and Friday's values only appear on Monday US time; the
   footer says so.
 - The minute is 17 rather than 0 because GitHub's scheduler is busiest on the
-  hour. The first scheduled slot, `0 3 * * 6` on 2026-09-26, never ran at
-  all, and the daily report's slots used to start about two hours late.
+  hour. Expect a run to start up to about two hours after its slot.
 
 **Daily report:** manual only. Its workflow has also been switched off in the
 Actions page since 2026-09-16, so the Run workflow button appears only after
@@ -243,7 +251,8 @@ the weekly report locally:
 - `python src/weekly_analyst.py` writes the note, at the cost of one Claude
   call.
 
-`run.bat` runs the daily report on Windows.
+`run.bat` runs the daily report on Windows. It sends a real message to
+Telegram and needs the Alpaca keys, so use the dry run above to test.
 
 ### Tests
 
@@ -253,8 +262,8 @@ python -m pytest -q                    # no network, no API keys, no messages
 ```
 
 The same suite runs in GitHub Actions on every pull request and every push
-to `main`, on Python 3.12, with the full `requirements.txt` installed. `tests/test_readme_claims.py` checks facts in this README against
-the code.
+to `main`, on Python 3.12, with the full `requirements.txt` installed.
+`tests/test_readme_claims.py` checks facts in this README against the code.
 
 ---
 
@@ -425,6 +434,11 @@ src/
 scripts/
   massive_probe.py      Manual live check of the Massive API (never run in Actions)
 tests/                  Network-free test suite (synthetic data only)
+requirements.txt        Pinned lock: what CI, the weekly run and a local venv install
+requirements-direct.txt The packages the code imports directly
+requirements-dev.txt    pytest
+run.bat                 Windows shortcut for the daily report (sends live)
+CLAUDE.md               Working notes and decisions for AI-assisted sessions
 ```
 
 Every data source returns `Metric` records carrying the value, changes, unit,
@@ -447,9 +461,12 @@ text; only `Metric` produces display strings.
 ## Known limitations
 
 - **No delivery guarantee.** GitHub's schedule is best-effort, so a run can
-  start late or be dropped. The two backup slots cover a dropped slot, but
-  not a scheduler that stops firing altogether (reported by other GitHub
-  users in mid-2026); then only the Run button helps.
+  start late or be dropped. The backup slots cover one dropped slot, but not
+  a scheduler that never fires this workflow, which is what has happened so
+  far (other GitHub users reported the same in mid-2026). Until a scheduled
+  run is seen, the Run button is the reliable way to send the report. If
+  Monday's slots stay silent too, the next step is to trigger the workflow
+  from outside GitHub.
 - **Weekly ETF changes are price-only.** Massive doesn't adjust for
   dividends, so high-yield funds such as HYG look weaker than their total
   return. The daily report's changes depend on its source: Alpaca's are
@@ -471,7 +488,7 @@ text; only `Metric` produces display strings.
   [Data-use rules](#data-use-rules).
 - **Costs are not zero.** GitHub Actions and the data APIs are free at this
   volume, but Claude requests are billed (a few cents per weekly note on the
-  default model).
+  default model, more on larger models).
 
 ---
 
