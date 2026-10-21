@@ -130,7 +130,7 @@ def test_an_etf_absent_from_grouped_daily_is_missing_not_dropped():
     snapshot = massive.get_etf_snapshot(full_fake(), FRIDAY, NOW)
     aihy = next(m for m in snapshot["theme"] if m.symbol == "AIHY")
     assert aihy.value is None and "no data" in aihy.error
-    assert sum(len(v) for v in snapshot.values()) == 22
+    assert sum(len(v) for v in snapshot.values()) == 24
 
 
 # --- yields ----------------------------------------------------------------------
@@ -298,7 +298,7 @@ def _grouped_failing_on(bad_day):
 
 
 def test_a_failed_earlier_week_only_loses_its_change(offline_sources, capsys):
-    """Before, one failed 13-weeks-back call blanked all 22 ETFs."""
+    """Before, one failed 13-weeks-back call blanked every ETF."""
     import weekly_dashboard
     snap = weekly_snapshot.get_weekly_snapshot(
         now=NOW, client=full_fake(v2__aggs__grouped=_grouped_failing_on("2026-06-19")))

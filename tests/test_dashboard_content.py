@@ -156,7 +156,7 @@ def test_auth_failure_produces_a_readable_report(monkeypatch):
     out = dashboard.format_dashboard(_macro(), sectors.get_sector_snapshot(), now=NOW)
     assert "Daily Market Dashboard" in out
     assert "N/A (Alpaca auth failed)" in out
-    assert "22 of 34 series unavailable" in out
+    assert "24 of 36 series unavailable" in out
 
 
 def test_empty_input_does_not_crash():

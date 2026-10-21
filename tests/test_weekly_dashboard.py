@@ -126,9 +126,9 @@ def test_a_full_week_fits_one_telegram_message(text):
 def test_movers_are_the_best_and_worst_weeks(snap, text):
     leaders, laggards = weekly_movers(snap["etfs"])
     assert [m.symbol for m in leaders] == ["BUG", "AIHY", "DRAM"]     # NCLD is missing
-    assert [m.symbol for m in laggards] == ["DIA", "SPY", "QQQ"]
-    assert "🏆 Leaders 1W: BUG ▲21.00% · AIHY ▲20.00% · DRAM ▲19.00%" in text
-    assert "📉 Laggards 1W: DIA ▲1.00% · SPY ▲2.00% · QQQ ▲3.00%" in text
+    assert [m.symbol for m in laggards] == ["DIA", "SPY", "RSP"]
+    assert "🏆 Leaders 1W: BUG ▲23.00% · AIHY ▲22.00% · DRAM ▲21.00%" in text
+    assert "📉 Laggards 1W: DIA ▲1.00% · SPY ▲2.00% · RSP ▲3.00%" in text
 
 
 def test_movers_need_at_least_two_usable_etfs(snap):

@@ -50,8 +50,8 @@ def test_the_prompt_carries_the_week_rows_breadth_movers_and_notes(snap):
     for metric in snap["macro"].values():
         assert metric.render_line() in prompt
     assert "- S&P 500 (SPY): $102.00 (▲2.00% 1W | ▲4.08% 1M | ▲13.33% 3M)  [as of 2026-09-18]" in prompt
-    assert "Breadth (ETFs up or flat): 21 of 21 up over 1W; 21 of 21 up over 1M; 20 of 20 up over 3M" in prompt
-    assert "Week's leaders (1W): BUG ▲21.00%, AIHY ▲20.00%, DRAM ▲19.00%" in prompt
+    assert "Breadth (ETFs up or flat): 23 of 23 up over 1W; 23 of 23 up over 1M; 22 of 22 up over 3M" in prompt
+    assert "Week's leaders (1W): BUG ▲23.00%, AIHY ▲22.00%, DRAM ▲21.00%" in prompt
     assert "- 3M unavailable (under 13 weeks of history): AIHY" in prompt
     assert "Neoclouds (NCLD): N/A (no data in the week of 2026-09-14)" in prompt
     assert "D/D" not in prompt and "USD/KRW" not in prompt
@@ -148,7 +148,7 @@ def test_fallback_trend_and_what_doesnt_fit(snap):
             "tightened 0.10pts; credit and equities agree on the trend.") in text
     assert ("What Doesn't Fit: This week's HY OAS move (+0.10pts) runs against its "
             "3M trend (-0.10pts).") in text
-    assert "21 of 21 tracked ETFs finished the week higher or flat" in text
+    assert "23 of 23 tracked ETFs finished the week higher or flat" in text
 
 
 def test_fallback_admits_when_there_is_nothing_to_read(snap):

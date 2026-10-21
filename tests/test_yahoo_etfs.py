@@ -28,7 +28,7 @@ def _patch_fetch(monkeypatch, frame, record=None):
 
 
 def test_all_symbols_covers_every_group():
-    assert len(sectors.all_symbols()) == 22
+    assert len(sectors.all_symbols()) == 24
     assert set(sectors.all_symbols()) == {
         s for key in sectors.SECTOR_GROUP_KEYS for s in sectors.ETF_GROUPS[key]}
 
@@ -74,7 +74,7 @@ def test_a_symbol_missing_from_the_batch_is_an_error_not_a_crash(monkeypatch):
     assert aihy.status == "error"
     assert "N/A" in aihy.render()
     # Every other symbol still made it.
-    assert sum(1 for m in sectors.all_metrics(snapshot) if m.is_usable) == 21
+    assert sum(1 for m in sectors.all_metrics(snapshot) if m.is_usable) == 23
 
 
 def test_a_total_fetch_failure_still_lists_every_etf(monkeypatch):
@@ -83,7 +83,7 @@ def test_a_total_fetch_failure_still_lists_every_etf(monkeypatch):
     monkeypatch.setattr(sectors, "fetch_yahoo_frame", boom)
 
     snapshot = sectors.get_sector_snapshot()
-    assert len(sectors.all_metrics(snapshot)) == 22
+    assert len(sectors.all_metrics(snapshot)) == 24
     assert all(m.status == "error" for m in sectors.all_metrics(snapshot))
     assert "Yahoo ETF fetch failed" in snapshot["price_source_note"]
 
