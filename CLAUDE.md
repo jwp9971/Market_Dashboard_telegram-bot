@@ -105,6 +105,8 @@ Environment variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ANTHROPIC_API_
   - A failed earlier-week grouped-daily call only drops that horizon for all ETFs (`snapshot["etf_gaps"]`, footer note); only this week's failure blanks the ETFs. One failed futures product loses only its row (the ratio carries the failing leg's reason).
   - FRED retries once after 5 s on no response / 429 / 5xx; Yahoo logs `-> N rows, last <date>`.
 
+- **ETF list change (2026-10-21):** added RSP (S&P 500 Equal Weight, Indices group after SPY) and XLP (Consumer Staples, Broad Industry); SOXX moved from Theme to Broad Industry. Groups are now Macro 10 / Broad Industry 7 / Theme 7 = 24. API cost: **no extra Massive calls** (grouped daily returns the whole market per date; still 18 per run); the paused daily bot's Alpaca path makes one call per ETF (24 + 1 probe, far under the free plan's per-minute limit); Yahoo stays one batched call. Message 1 grows by ~150 characters (synthetic snapshot 3,198 → 3,350; one Telegram part, limit 4,096, room for roughly 9 more rows). Tests that pin counts or mover positions were updated with the list.
+
 Next: new data and content ideas from the user, one branch and PR per change.
 
 ### Massive data terms — hard rules
@@ -131,7 +133,7 @@ Massive's market-data terms limit use to **personal, non-commercial** use. They 
 - Base URL `https://api.massive.com`. Auth is via the header `Authorization: Bearer <key>` (a `?apiKey=` parameter also works, but it would leak into URLs). The client only uses the header.
 - **5 REST requests/minute per asset class**, each class counted separately. Reference endpoints have their own bucket. Economy isn't named, so the client gives it its own 5/min bucket. Over the limit → **429** with no `Retry-After`. Not entitled → **403** `NOT_AUTHORIZED`. Extra API keys don't add capacity.
 - EOD data, ~2 years history (indices 1+ year). No snapshots, trades, quotes, WebSockets or flat files.
-- **Grouped daily** `/v2/aggs/grouped/locale/us/market/stocks/{date}` returns the whole US market (~12,600 rows) **in one call**. **All 22 ETFs were present.** Fields: `T,o,h,l,c,v,vw,n,t`.
+- **Grouped daily** `/v2/aggs/grouped/locale/us/market/stocks/{date}` returns the whole US market (~12,600 rows) **in one call**. **All 22 ETFs were present** (RSP and XLP, added 2026-10-21, not yet confirmed live; an absent ticker shows as a missing row, not a crash). Fields: `T,o,h,l,c,v,vw,n,t`.
   - Closes are split-adjusted, but **never dividend-adjusted**, so returns are price-only. The daily bot uses total return; this difference must be disclosed.
   - A **weekend date returns 200 `OK`, `resultsCount: 0`, and no `results` key at all**. Treat a missing or empty `results` as "no session" (this also covers holidays).
 - **Treasury yields** `/fed/v1/treasury-yields` (`date.gte`, `sort=date.desc`, `limit`):
@@ -155,7 +157,7 @@ Same instruments as the daily bot, **minus USD/KRW**. New data (inflation, fundi
 
 | Data | Weekly source | To verify |
 |---|---|---|
-| 22 ETFs | Massive Stocks grouped daily — replaces Alpaca; fixes the IEX thin-ETF problem | ✅ all 22 present; price-only (not dividend-adjusted) |
+| 24 ETFs (22 until 2026-10-21) | Massive Stocks grouped daily — replaces Alpaca; fixes the IEX thin-ETF problem | ✅ the original 22 present; RSP / XLP to confirm on the first run; price-only (not dividend-adjusted) |
 | 10Y / 2Y (→ 2s10s) | Massive Economy `/fed/v1/treasury-yields` | ✅ works; one business day behind, like FRED |
 | WTI / gold / copper | Massive Futures: settlement of the most-traded nearby contract; all horizons from that one contract (no roll jumps) | ✅ |
 | DXY | **Yahoo `DX-Y.NYB`** (decided 2026-09-24; not on Massive, and computing it from Massive FX is ruled out by the terms) | ✅ |

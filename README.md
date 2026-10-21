@@ -102,7 +102,7 @@ a fixed fallback note instead, with a ⚠️ warning explaining why.
 
 | Data | Source | Notes |
 |---|---|---|
-| **22** ETFs | Massive, grouped daily bars | Price-only: split-adjusted but not dividend-adjusted |
+| **24** ETFs | Massive, grouped daily bars | Price-only: split-adjusted but not dividend-adjusted |
 | 10Y, 2Y, 2s10s | Massive, Treasury yields | One business day behind |
 | WTI, gold, copper | Massive, futures | Official settlement of the most-traded of the next three contracts. That one contract gives every horizon, so a contract roll never shows up as a jump |
 | HY OAS, IG OAS | FRED (ICE BofA) | One business day behind |
@@ -112,11 +112,15 @@ a fixed fallback note instead, with a ⚠️ warning explaining why.
 
 USD/KRW is not part of the weekly report.
 
-### The 22 ETFs (both reports)
+### The 24 ETFs (both reports)
 
-- **Macro (9)**: DIA, SPY, QQQ, IWM, HYG, IBIT, EWY, EWJ, IEMG
-- **Broad Industry (5)**: XLE, XLF, XLV, XLI, XLY
-- **Theme (8)**: SOXX, IGV, PAVE, ITA, DRAM, AIHY, BUG, NCLD
+- **Macro (10)**: DIA, SPY, RSP, QQQ, IWM, HYG, IBIT, EWY, EWJ, IEMG
+- **Broad Industry (7)**: XLE, XLF, XLV, XLI, XLY, XLP, SOXX
+- **Theme (7)**: IGV, PAVE, ITA, DRAM, AIHY, BUG, NCLD
+
+RSP (S&P 500 equal weight) and XLP (consumer staples) were added, and SOXX
+moved from Theme to Broad Industry, on 2026-10-21. RSP next to SPY shows
+whether a move is broad or carried by the largest companies.
 
 Korea is represented by **EWY**, a US-listed, USD-denominated ETF. Its moves
 include USD/KRW and follow US trading hours, so it is only a rough stand-in,
@@ -323,7 +327,7 @@ hand once the workflow is enabled again.
 
 … FX & Dollar, then three ETF sections …
 
-⚠️ Data notes: 1 of 34 series unavailable (AIHY).
+⚠️ Data notes: 1 of 36 series unavailable (AIHY).
 ```
 
 Changes are labelled `D/D`, `1W` and `1M`. These are **observation counts,
@@ -335,8 +339,8 @@ not calendar intervals**: 1, 5 and 21 preceding daily observations.
 |---|---|---|
 | **FRED** | 2Y/10Y Treasury yields, HY OAS, IG OAS | Yields from H.15 (same business day); ICE BofA OAS series routinely lag one business day |
 | **Yahoo Finance** | VIX, WTI, gold, copper, Dollar Index, USD/KRW | via `yfinance`, which is unofficial and can break without notice |
-| **Alpaca Markets** | Daily bars for the 22 ETFs | Default. Free plans serve IEX only (see below) |
-| **Yahoo Finance** | The same 22 ETFs, opt-in via `ETF_SOURCE=yahoo` | One batched request, consolidated closes, but lags a session |
+| **Alpaca Markets** | Daily bars for the 24 ETFs | Default. Free plans serve IEX only (see below) |
+| **Yahoo Finance** | The same 24 ETFs, opt-in via `ETF_SOURCE=yahoo` | One batched request, consolidated closes, but lags a session |
 | **Anthropic Claude** | The strategist commentary | Model set by `ANTHROPIC_MODEL`, default `claude-sonnet-5` |
 
 ### ETF price policy
@@ -345,7 +349,7 @@ ETF closes come from **Alpaca** by default. It tries the **SIP**
 (consolidated) feed with split adjustment once per run. If the account isn't
 entitled to SIP, it falls back to **IEX** and says so in the report footer.
 
-**Yahoo** is available with `ETF_SOURCE=yahoo`. It fetches all 22 symbols in
+**Yahoo** is available with `ETF_SOURCE=yahoo`. It fetches all 24 symbols in
 one batched request. The printed price is the real market close, and the
 changes are computed from split- and dividend-adjusted closes, so they are
 total returns and an ex-dividend date doesn't look like a decline.

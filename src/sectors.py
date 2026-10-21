@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - exercised only without alpaca-py
 # 22 rows. Freshness beats the one problem Yahoo solved, because a stale D/D
 # is wrong on every row while a frozen ticker is wrong on one.
 #
-# "yahoo" batches all 22 symbols into one request and returns consolidated,
+# "yahoo" batches every symbol into one request and returns consolidated,
 # split- and dividend-adjusted closes. It fixes thinly traded names -- AIHY
 # reported 0.00% over both a day and a week on Alpaca's IEX fallback, and real
 # moves on Yahoo -- but lags a session at the hour this report runs.
@@ -53,6 +53,7 @@ MACRO_ETFS = {
     # Indices
     "DIA": "Dow Jones",
     "SPY": "S&P 500",
+    "RSP": "S&P 500 Equal Weight",
     "QQQ": "Nasdaq 100",
     "IWM": "Russell 2000",
     # Bonds
@@ -71,10 +72,11 @@ BROAD_INDUSTRY_ETFS = {
     "XLV": "Healthcare",
     "XLI": "Industrials",
     "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples",
+    "SOXX": "Semiconductors",
 }
 
 THEME_ETFS = {
-    "SOXX": "Semiconductors",
     "IGV": "Software",
     "PAVE": "Infrastructure",
     "ITA": "Aerospace & Defense",
@@ -214,7 +216,7 @@ def yahoo_snapshot(today=None):
     }
 
     # If the request succeeded but nothing parsed, the batched response was
-    # shaped differently than expected. Rather than report 22 empty rows,
+    # shaped differently than expected. Rather than report every row empty,
     # retry one symbol at a time through the call shape macro.py already
     # relies on, and say in the report that it happened.
     if data is not None and not any(m.is_usable for m in all_metrics(snapshot)):
@@ -275,7 +277,7 @@ def _fetch_bars(client, symbol, feed):
 def resolve_feed(client, probe_symbol="SPY"):
     """
     Decides the feed once per run with a single probe request, rather than
-    letting 22 fetches each fail and retry. Returns (feed_name, note); the
+    letting every per-ETF fetch fail and retry. Returns (feed_name, note); the
     note is non-empty only when the preferred feed was refused.
     """
     if PREFERRED_FEED not in FEEDS:

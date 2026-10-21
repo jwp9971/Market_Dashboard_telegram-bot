@@ -1,7 +1,7 @@
 """
 Keeps the README honest.
 
-The original README claimed 21 ETFs (there are 22) and optional OpenAI support
+The original README claimed 21 ETFs (there were 22) and optional OpenAI support
 (no such code exists). Documentation drifts silently; these assertions make it
 fail loudly instead.
 """
@@ -18,7 +18,7 @@ SRC = list((ROOT / "src").glob("*.py"))
 
 def test_etf_count_matches_the_code():
     total = sum(len(g) for g in sectors.ETF_GROUPS.values())
-    assert total == 22
+    assert total == 24
     assert f"**{total}** ETFs" in README
 
 

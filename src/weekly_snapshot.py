@@ -2,7 +2,7 @@
 The weekly commentary's data: every number for the last completed Mon-Fri
 week as a Metric with 1W / 1M / 3M changes.
 
-    Massive  22 ETFs (grouped daily), 10Y / 2Y / 2s10s, WTI / gold / copper
+    Massive  24 ETFs (grouped daily), 10Y / 2Y / 2s10s, WTI / gold / copper
     FRED     HY and IG OAS
     Cboe     VIX, falling back to Yahoo ^VIX when the Cboe file is behind
     Yahoo    DXY
